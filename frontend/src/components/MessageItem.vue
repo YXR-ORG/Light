@@ -14,33 +14,79 @@ const content = computed(() => {
         `🔧 **工具调用:** ${c.function?.name}\n\`\`\`json\n${JSON.stringify(JSON.parse(c.function?.arguments || '{}'), null, 2)}\n\`\`\``
       ).join('\n\n')
       return props.msg.content + '\n\n' + toolParts
-    } catch {
-      return props.msg.content
-    }
+    } catch { return props.msg.content }
   }
   return props.msg.content
 })
 </script>
 
 <template>
-  <div class="message" :class="{ user: isUser, assistant: !isUser }">
-    <div class="avatar">{{ isUser ? '你' : 'AI' }}</div>
-    <div class="bubble">
-      <div class="role-label">{{ isUser ? '你' : 'AI 助手' }}</div>
-      <div class="content" v-text="content || (msg.role === 'assistant' ? '...' : '')" />
+  <div class="msg-row" :class="{ user: isUser, assistant: !isUser }">
+    <div class="msg-avatar">{{ isUser ? 'U' : 'AI' }}</div>
+    <div class="msg-content">
+      <div class="msg-label">{{ isUser ? '你' : 'AI 助手' }}</div>
+      <div class="msg-text" v-text="content || (msg.role === 'assistant' ? '...' : '')" />
     </div>
   </div>
 </template>
 
 <style scoped>
-.message { display: flex; gap: 12px; padding: 16px 24px; }
-.avatar {
-  width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center;
-  justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0;
+.msg-row {
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  transition: background var(--duration-fast) var(--ease-out);
 }
-.user .avatar { background: var(--accent); color: #fff; }
-.assistant .avatar { background: #e5e7eb; color: #374151; }
-.bubble { flex: 1; min-width: 0; }
-.role-label { font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--text-secondary); }
-.content { line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+
+.msg-row.assistant {
+  background: var(--color-paper-2);
+}
+
+.msg-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-top: 2px;
+}
+
+.user .msg-avatar {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.assistant .msg-avatar {
+  background: var(--color-paper-4);
+  color: var(--color-text-2);
+}
+
+.msg-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.msg-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-2);
+  margin-bottom: var(--space-1);
+}
+
+.msg-text {
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text);
+}
+
+.user .msg-text {
+  color: var(--color-text);
+}
 </style>

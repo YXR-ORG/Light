@@ -6,7 +6,7 @@ import ChatView from './components/ChatView.vue'
 </script>
 
 <template>
-  <div class="app-layout">
+  <div class="app-shell">
     <Sidebar />
     <main class="main-area">
       <ChatView />
@@ -16,19 +16,18 @@ import ChatView from './components/ChatView.vue'
 </template>
 
 <style>
-:root {
-  --sidebar-bg: #f8f9fa;
-  --border-color: #e5e7eb;
-  --hover-bg: #f3f4f6;
-  --active-bg: #e5e7eb;
-  --text-secondary: #6b7280;
-  --accent: #3b82f6;
-  --bg: #ffffff;
-  --text: #111827;
+@import './assets/tokens.css';
+
+.app-shell {
+  display: flex;
+  height: 100vh;
+  background: var(--color-paper);
 }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--text); background: var(--bg); }
-.app-layout { display: flex; height: 100vh; }
-.main-area { flex: 1; display: flex; flex-direction: column; }
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 </style>
