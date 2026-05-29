@@ -1,21 +1,31 @@
-<script lang="ts" setup>
-import HelloWorld from './components/HelloWorld.vue'</script>
+<script setup lang="ts">
+import Sidebar from './components/Sidebar.vue'
+import ChatView from './components/ChatView.vue'
+</script>
 
 <template>
-  <img id="logo" alt="Wails logo" src="./assets/images/logo-universal.png"/>
-  <HelloWorld/>
+  <div class="app-layout">
+    <Sidebar />
+    <main class="main-area">
+      <ChatView />
+    </main>
+  </div>
 </template>
 
 <style>
-#logo {
-  display: block;
-  width: 50%;
-  height: 50%;
-  margin: auto;
-  padding: 10% 0 0;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: 100% 100%;
-  background-origin: content-box;
+:root {
+  --sidebar-bg: #f8f9fa;
+  --border-color: #e5e7eb;
+  --hover-bg: #f3f4f6;
+  --active-bg: #e5e7eb;
+  --text-secondary: #6b7280;
+  --accent: #3b82f6;
+  --bg: #ffffff;
+  --text: #111827;
 }
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--text); background: var(--bg); }
+.app-layout { display: flex; height: 100vh; }
+.main-area { flex: 1; display: flex; flex-direction: column; }
 </style>
