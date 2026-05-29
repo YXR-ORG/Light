@@ -2,26 +2,36 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"os"
+	"path/filepath"
+
+	"wails-ai-chat/internal/eino"
+	"wails-ai-chat/internal/handler"
+	"wails-ai-chat/internal/storage"
 )
 
-// App struct
 type App struct {
-	ctx context.Context
+	chatHandler         *handler.ChatHandler
+	conversationHandler *handler.ConversationHandler
+	settingsHandler     *handler.SettingsHandler
+	ctx                 context.Context
 }
 
-// NewApp creates a new App application struct
 func NewApp() *App {
-	return &App{}
+	chatSvc := eino.NewChatService()
+	return &App{
+		chatHandler:         handler.NewChatHandler(chatSvc),
+		conversationHandler: handler.NewConversationHandler(),
+		settingsHandler:     handler.NewSettingsHandler(),
+	}
 }
 
-// startup is called when the app starts. The context is saved
-// so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-}
-
-// Greet returns a greeting for the given name
-func (a *App) Greet(name string) string {
-	return fmt.Sprintf("Hello %s, It's show time!", name)
+	home, _ := os.UserHomeDir()
+	dbPath := filepath.Join(home, ".wails-chat", "chat.db")
+	os.MkdirAll(filepath.Dir(dbPath), 0755)
+	if err := storage.InitDB(dbPath); err != nil {
+		panic("failed to init db: " + err.Error())
+	}
 }
