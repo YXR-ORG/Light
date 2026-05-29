@@ -35,6 +35,10 @@ func (h *ChatHandler) SendMessage(ctx context.Context, req SendMessageRequest) (
 	apiKey, _ := storage.GetSetting(fmt.Sprintf("%s_api_key", req.Provider))
 	baseURL, _ := storage.GetSetting(fmt.Sprintf("%s_base_url", req.Provider))
 
+	if req.Provider != "ollama" && apiKey == "" {
+		return nil, fmt.Errorf("请先在设置中配置 %s 的 API Key", req.Provider)
+	}
+
 	if err := h.chat.Configure(req.Provider, req.Model, apiKey, baseURL); err != nil {
 		return nil, err
 	}
@@ -79,6 +83,10 @@ type StreamChunk struct {
 func (h *ChatHandler) StreamChat(ctx context.Context, req SendMessageRequest) error {
 	apiKey, _ := storage.GetSetting(fmt.Sprintf("%s_api_key", req.Provider))
 	baseURL, _ := storage.GetSetting(fmt.Sprintf("%s_base_url", req.Provider))
+
+	if req.Provider != "ollama" && apiKey == "" {
+		return fmt.Errorf("请先在设置中配置 %s 的 API Key", req.Provider)
+	}
 
 	if err := h.chat.Configure(req.Provider, req.Model, apiKey, baseURL); err != nil {
 		return err

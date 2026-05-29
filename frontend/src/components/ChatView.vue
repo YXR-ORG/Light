@@ -14,7 +14,7 @@ const store = useChatStore()
   <div class="chat-view empty" v-else>
     <div class="empty-state">
       <h2>Wails AI Chat</h2>
-      <p>Select a conversation or create a new one to start chatting</p>
+      <p>选择一个对话或新建一个开始聊天</p>
     </div>
   </div>
 </template>

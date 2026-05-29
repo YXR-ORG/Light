@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { Conversation } from '../types'
+import type { storage } from '../../wailsjs/go/models'
 
 const props = defineProps<{
-  conv: Conversation
+  conv: storage.Conversation
   active: boolean
 }>()
 

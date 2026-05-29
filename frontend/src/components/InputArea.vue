@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '../stores/chat'
+import { useSettingsStore } from '../stores/settings'
 import { StreamChat } from '../../wailsjs/go/handler/ChatHandler'
 import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import type { StreamChunk } from '../types'
 
 const store = useChatStore()
+const settingsStore = useSettingsStore()
 const input = ref('')
 const unsubs: (() => void)[] = []
 
@@ -45,7 +47,12 @@ async function send() {
       model: conv?.model || 'gpt-4o',
     })
   } catch (e: any) {
-    store.appendStream(`\n\n**Error:** ${e.message || e}`)
+    const msg = e.message || String(e)
+    if (msg.includes('API key') || msg.includes('api_key') || msg.includes('not configured')) {
+      store.appendStream('\n\n**⚠️ 请先在设置中配置 API Key**\n\n点击侧边栏底部的 ⚙️ 按钮打开设置')
+    } else {
+      store.appendStream(`\n\n**错误:** ${msg}`)
+    }
     store.setStreaming(false)
   }
 }
@@ -56,26 +63,37 @@ function onKeydown(e: KeyboardEvent) {
     send()
   }
 }
+
+function openSettings() {
+  settingsStore.setOpen(true)
+}
 </script>
 
 <template>
   <div class="input-area">
-    <textarea
-      v-model="input"
-      placeholder="Type a message..."
-      :disabled="store.streaming"
-      @keydown="onKeydown"
-      rows="3"
-    />
-    <button class="send-btn" :disabled="!input.trim() || store.streaming" @click="send">
-      Send
-    </button>
+    <div class="input-row">
+      <textarea
+        v-model="input"
+        placeholder="输入消息..."
+        :disabled="store.streaming"
+        @keydown="onKeydown"
+        rows="3"
+      />
+      <div class="actions">
+        <button class="settings-btn" @click="openSettings" title="设置">⚙️</button>
+        <button class="send-btn" :disabled="!input.trim() || store.streaming" @click="send">
+          发送
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .input-area {
-  padding: 16px 24px; border-top: 1px solid var(--border-color);
+  padding: 0 24px 16px;
+}
+.input-row {
   display: flex; gap: 12px; align-items: flex-end;
 }
 textarea {
@@ -84,6 +102,14 @@ textarea {
   outline: none;
 }
 textarea:focus { border-color: var(--accent); }
+.actions {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.settings-btn {
+  width: 40px; height: 40px; border: 1px solid var(--border-color);
+  border-radius: 8px; background: #fff; cursor: pointer; font-size: 18px;
+  display: flex; align-items: center; justify-content: center;
+}
 .send-btn {
   padding: 10px 20px; background: var(--accent); color: #fff; border: none;
   border-radius: 8px; cursor: pointer; font-size: 14px;

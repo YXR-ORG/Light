@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useSettingsStore } from './stores/settings'
+import SettingsDialog from './components/SettingsDialog.vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatView from './components/ChatView.vue'
 </script>
@@ -10,6 +12,7 @@ import ChatView from './components/ChatView.vue'
       <ChatView />
     </main>
   </div>
+  <SettingsDialog />
 </template>
 
 <style>

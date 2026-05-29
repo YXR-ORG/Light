@@ -11,7 +11,7 @@ const content = computed(() => {
     try {
       const calls = JSON.parse(props.msg.tool_calls)
       const toolParts = calls.map((c: any) =>
-        `🔧 **Tool Call:** ${c.function?.name}\n\`\`\`json\n${JSON.stringify(JSON.parse(c.function?.arguments || '{}'), null, 2)}\n\`\`\``
+        `🔧 **工具调用:** ${c.function?.name}\n\`\`\`json\n${JSON.stringify(JSON.parse(c.function?.arguments || '{}'), null, 2)}\n\`\`\``
       ).join('\n\n')
       return props.msg.content + '\n\n' + toolParts
     } catch {
@@ -24,9 +24,9 @@ const content = computed(() => {
 
 <template>
   <div class="message" :class="{ user: isUser, assistant: !isUser }">
-    <div class="avatar">{{ isUser ? 'U' : 'AI' }}</div>
+    <div class="avatar">{{ isUser ? '你' : 'AI' }}</div>
     <div class="bubble">
-      <div class="role-label">{{ isUser ? 'You' : 'Assistant' }}</div>
+      <div class="role-label">{{ isUser ? '你' : 'AI 助手' }}</div>
       <div class="content" v-text="content || (msg.role === 'assistant' ? '...' : '')" />
     </div>
   </div>

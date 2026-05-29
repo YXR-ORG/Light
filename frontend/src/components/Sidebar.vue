@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useChatStore } from '../stores/chat'
+import { useSettingsStore } from '../stores/settings'
 import ConversationItem from './ConversationItem.vue'
 
 import {
@@ -8,6 +9,7 @@ import {
 } from '../../wailsjs/go/handler/ConversationHandler'
 
 const store = useChatStore()
+const settingsStore = useSettingsStore()
 
 onMounted(() => {
   loadConversations()
@@ -18,7 +20,7 @@ async function loadConversations() {
     const list = await List()
     store.setConversations(list)
   } catch (e) {
-    console.error('load conversations failed', e)
+    console.error('加载对话失败', e)
   }
 }
 
@@ -28,7 +30,7 @@ async function selectConv(id: string) {
     const msgs = await GetMessages(id)
     store.setMessages(msgs)
   } catch (e) {
-    console.error('load messages failed', e)
+    console.error('加载消息失败', e)
   }
 }
 
@@ -36,7 +38,7 @@ async function deleteConv(id: string) {
   try {
     await Delete(id)
   } catch (e) {
-    console.error('delete failed', e)
+    console.error('删除失败', e)
   }
   if (store.currentConvId === id) {
     store.setCurrentConv(null)
@@ -52,16 +54,20 @@ async function newChat() {
     store.setCurrentConv(conv.id)
     store.setMessages([])
   } catch (e) {
-    console.error('create conversation failed', e)
+    console.error('新建对话失败', e)
   }
+}
+
+function openSettings() {
+  settingsStore.setOpen(true)
 }
 </script>
 
 <template>
   <aside class="sidebar">
     <div class="sidebar-header">
-      <h2>Chats</h2>
-      <button class="new-btn" @click="newChat">+ New</button>
+      <h2>对话</h2>
+      <button class="new-btn" @click="newChat">+ 新建</button>
     </div>
     <div class="conv-list">
       <ConversationItem
@@ -72,6 +78,9 @@ async function newChat() {
         @select="selectConv"
         @delete="deleteConv"
       />
+    </div>
+    <div class="sidebar-footer">
+      <button class="settings-btn" @click="openSettings">⚙️ 设置</button>
     </div>
   </aside>
 </template>
@@ -91,4 +100,12 @@ async function newChat() {
   background: var(--accent); color: #fff; cursor: pointer; font-size: 13px;
 }
 .conv-list { flex: 1; overflow-y: auto; padding: 8px; }
+.sidebar-footer {
+  padding: 12px 16px; border-top: 1px solid var(--border-color);
+}
+.settings-btn {
+  width: 100%; padding: 8px; border-radius: 6px; border: 1px solid var(--border-color);
+  background: #fff; cursor: pointer; font-size: 13px; text-align: center;
+}
+.settings-btn:hover { background: var(--hover-bg); }
 </style>

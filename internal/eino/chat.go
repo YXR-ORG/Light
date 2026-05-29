@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/cloudwego/eino-ext/components/model/claude"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -41,6 +42,15 @@ func (s *ChatService) Configure(provider, modelName, apiKey, baseURL string) err
 			APIKey:  apiKey,
 			BaseURL: baseURL,
 		})
+	case "claude":
+		claudeCfg := &claude.Config{
+			Model:  modelName,
+			APIKey: apiKey,
+		}
+		if baseURL != "" {
+			claudeCfg.BaseURL = &baseURL
+		}
+		s.llm, err = claude.NewChatModel(context.Background(), claudeCfg)
 	case "ollama":
 		if baseURL == "" {
 			baseURL = "http://localhost:11434"
@@ -51,10 +61,10 @@ func (s *ChatService) Configure(provider, modelName, apiKey, baseURL string) err
 			BaseURL: fmt.Sprintf("%s/v1", baseURL),
 		})
 	default:
-		err = fmt.Errorf("unsupported provider: %s", provider)
+		err = fmt.Errorf("不支持的供应商: %s", provider)
 	}
 	if err != nil {
-		slog.Error("failed to create chat model", "provider", provider, "error", err)
+		slog.Error("创建对话模型失败", "provider", provider, "error", err)
 	}
 	return err
 }
@@ -65,11 +75,11 @@ func (s *ChatService) Chat(ctx context.Context, messages []*schema.Message) (*sc
 	s.mu.RUnlock()
 
 	if llm == nil {
-		return nil, fmt.Errorf("chat model not configured")
+		return nil, fmt.Errorf("对话模型未配置")
 	}
 	result, err := llm.Generate(ctx, messages)
 	if err != nil {
-		return nil, fmt.Errorf("generate failed: %w", err)
+		return nil, fmt.Errorf("生成失败: %w", err)
 	}
 	return result, nil
 }
@@ -80,7 +90,7 @@ func (s *ChatService) Stream(ctx context.Context, messages []*schema.Message) (*
 	s.mu.RUnlock()
 
 	if llm == nil {
-		return nil, fmt.Errorf("chat model not configured")
+		return nil, fmt.Errorf("对话模型未配置")
 	}
 	return llm.Stream(ctx, messages)
 }
