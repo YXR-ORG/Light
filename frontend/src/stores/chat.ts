@@ -1,15 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Conversation, Message } from '../types'
+import type { storage } from '../../wailsjs/go/models'
 
 export const useChatStore = defineStore('chat', () => {
-  const conversations = ref<Conversation[]>([])
+  const conversations = ref<storage.Conversation[]>([])
   const currentConvId = ref<string | null>(null)
-  const messages = ref<Message[]>([])
+  const messages = ref<storage.Message[]>([])
   const streaming = ref(false)
   const streamContent = ref('')
 
-  function setConversations(list: Conversation[]) {
+  function setConversations(list: storage.Conversation[]) {
     conversations.value = list
   }
 
@@ -17,11 +17,11 @@ export const useChatStore = defineStore('chat', () => {
     currentConvId.value = id
   }
 
-  function setMessages(msgs: Message[]) {
+  function setMessages(msgs: storage.Message[]) {
     messages.value = msgs
   }
 
-  function appendMessage(msg: Message) {
+  function appendMessage(msg: storage.Message) {
     messages.value.push(msg)
   }
 
