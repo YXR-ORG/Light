@@ -4,3 +4,5 @@ import {context} from '../models';
 import {handler} from '../models';
 
 export function SendMessage(arg1:context.Context,arg2:handler.SendMessageRequest):Promise<handler.SendMessageResponse>;
+
+export function StreamChat(arg1:context.Context,arg2:handler.SendMessageRequest):Promise<void>;

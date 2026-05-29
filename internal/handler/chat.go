@@ -9,6 +9,7 @@ import (
 	"wails-ai-chat/internal/storage"
 
 	"github.com/cloudwego/eino/schema"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type ChatHandler struct {
@@ -73,4 +74,49 @@ type StreamChunk struct {
 	Content string `json:"content"`
 	Done    bool   `json:"done"`
 	Error   string `json:"error,omitempty"`
+}
+
+func (h *ChatHandler) StreamChat(ctx context.Context, req SendMessageRequest) error {
+	apiKey, _ := storage.GetSetting(fmt.Sprintf("%s_api_key", req.Provider))
+	baseURL, _ := storage.GetSetting(fmt.Sprintf("%s_base_url", req.Provider))
+
+	if err := h.chat.Configure(req.Provider, req.Model, apiKey, baseURL); err != nil {
+		return err
+	}
+
+	storage.SaveMessage(req.ConversationID, "user", req.Content, "", "")
+
+	history, err := storage.GetMessages(req.ConversationID)
+	if err != nil {
+		return err
+	}
+
+	var einoMsgs []*schema.Message
+	for _, m := range history {
+		einoMsgs = append(einoMsgs, &schema.Message{
+			Role:    storage.ToEinoRole(m.Role),
+			Content: m.Content,
+		})
+	}
+
+	stream, err := h.chat.Stream(ctx, einoMsgs)
+	if err != nil {
+		return err
+	}
+
+	fullContent := ""
+	defer stream.Close()
+
+	for {
+		chunk, err := stream.Recv()
+		if err != nil {
+			runtime.EventsEmit(ctx, "chat:chunk", StreamChunk{Done: true})
+			break
+		}
+		fullContent += chunk.Content
+		runtime.EventsEmit(ctx, "chat:chunk", StreamChunk{Content: chunk.Content})
+	}
+
+	storage.SaveMessage(req.ConversationID, "assistant", fullContent, "", "")
+	return nil
 }

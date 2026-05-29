@@ -1,32 +1,51 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '../stores/chat'
-import { SendMessage } from '../../wailsjs/go/handler/ChatHandler'
+import { StreamChat } from '../../wailsjs/go/handler/ChatHandler'
 import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
-import type { storage } from '../../wailsjs/go/models'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
+import type { StreamChunk } from '../types'
 
 const store = useChatStore()
 const input = ref('')
+const unsubs: (() => void)[] = []
+
+onMounted(() => {
+  const unsub = EventsOn('chat:chunk', (chunk: StreamChunk) => {
+    if (chunk.done) {
+      store.setStreaming(false)
+      store.resetStream()
+      if (store.currentConvId) {
+        GetMessages(store.currentConvId).then(msgs => store.setMessages(msgs))
+      }
+      return
+    }
+    store.appendStream(chunk.content)
+  })
+  unsubs.push(unsub)
+})
+
+onUnmounted(() => {
+  unsubs.forEach(fn => fn())
+})
 
 async function send() {
   const text = input.value.trim()
   if (!text || !store.currentConvId) return
   input.value = ''
+  store.resetStream()
   store.setStreaming(true)
 
   try {
     const conv = store.conversations.find(c => c.id === store.currentConvId)
-    await SendMessage(null, {
+    await StreamChat(null, {
       conversation_id: store.currentConvId,
       content: text,
       provider: conv?.provider || 'openai',
       model: conv?.model || 'gpt-4o',
     })
-    const msgs = await GetMessages(store.currentConvId)
-    store.setMessages(msgs)
   } catch (e: any) {
     store.appendStream(`\n\n**Error:** ${e.message || e}`)
-  } finally {
     store.setStreaming(false)
   }
 }

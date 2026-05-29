@@ -5,3 +5,7 @@
 export function SendMessage(arg1, arg2) {
   return window['go']['handler']['ChatHandler']['SendMessage'](arg1, arg2);
 }
+
+export function StreamChat(arg1, arg2) {
+  return window['go']['handler']['ChatHandler']['StreamChat'](arg1, arg2);
+}
