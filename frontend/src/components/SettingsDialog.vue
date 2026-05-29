@@ -11,7 +11,6 @@ const activeTab = ref<Provider>('openai')
 const openaiKey = ref(''); const openaiBaseURL = ref('')
 const claudeKey = ref(''); const claudeBaseURL = ref('')
 const ollamaBaseURL = ref('http://localhost:11434')
-const defaultProvider = ref('openai')
 const defaultModel = ref('gpt-4o')
 const saving = ref(false)
 
@@ -27,7 +26,6 @@ async function loadSettings() {
   claudeKey.value = await Get('claude_api_key').catch(() => '')
   claudeBaseURL.value = await Get('claude_base_url').catch(() => '')
   ollamaBaseURL.value = await Get('ollama_base_url').catch(() => 'http://localhost:11434')
-  defaultProvider.value = await Get('default_provider').catch(() => 'openai')
   defaultModel.value = await Get('default_model').catch(() => 'gpt-4o')
 }
 
@@ -39,7 +37,6 @@ async function save() {
     if (claudeKey.value) await Set('claude_api_key', claudeKey.value)
     if (claudeBaseURL.value) await Set('claude_base_url', claudeBaseURL.value)
     if (ollamaBaseURL.value) await Set('ollama_base_url', ollamaBaseURL.value)
-    await Set('default_provider', defaultProvider.value)
     await Set('default_model', defaultModel.value)
     settingsStore.setOpen(false)
   } catch (e: any) {
@@ -100,22 +97,12 @@ async function save() {
             </div>
           </div>
 
-          <div class="divider" />
+      <div class="divider" />
 
-          <div class="defaults">
-            <div class="field half">
-              <label>默认供应商</label>
-              <select v-model="defaultProvider">
-                <option value="openai">OpenAI</option>
-                <option value="claude">Claude</option>
-                <option value="ollama">Ollama</option>
-              </select>
-            </div>
-            <div class="field half">
-              <label>默认模型</label>
-              <input v-model="defaultModel" placeholder="gpt-4o, claude-3-opus, qwen2.5" />
-            </div>
-          </div>
+      <div class="field">
+        <label>默认模型</label>
+        <input v-model="defaultModel" placeholder="gpt-4o, claude-3-opus, qwen2.5" />
+      </div>
         </div>
 
         <div class="modal-footer">
@@ -210,8 +197,6 @@ async function save() {
 
 .divider { height: 1px; background: var(--color-border); margin: var(--space-5) 0; }
 
-.defaults { display: flex; gap: var(--space-4); }
-.defaults .field.half { flex: 1; }
 
 .modal-footer {
   display: flex; justify-content: flex-end; gap: var(--space-2);
