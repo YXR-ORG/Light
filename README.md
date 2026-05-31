@@ -23,16 +23,6 @@ Light 是一款基于 [Wails](https://wails.io) + [eino](https://github.com/clou
 - **明暗主题**：浅色 / 深色 / 跟随系统，持久化记忆
 - **自动标题**：首条消息自动生成对话标题，大模型 + 规则双重兜底
 
-## 截图
-
-> 浅色模式
-
-![Light Mode](docs/screenshot-light.png)
-
-> 深色模式
-
-![Dark Mode](docs/screenshot-dark.png)
-
 ## 下载
 
 前往 [Releases](https://github.com/YXR-ORG/Light/releases) 页面下载最新版本：
