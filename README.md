@@ -74,6 +74,18 @@ description: 技能描述
 
 打开 **设置 → Skills 广场** 上传 ZIP 即可导入。
 
+## 发布新版本
+
+```bash
+git tag v1.x.x
+git push origin v1.x.x
+```
+
+GitHub Actions 会自动构建 macOS + Windows 两个平台并发布到 [Releases](https://github.com/YXR-ORG/Light/releases)。
+
+- `v1.0.0` → 正式版
+- `v1.1.0-beta.1` → 预发布版（自动标记为 pre-release）
+
 ## 本地开发
 
 ### 环境要求
