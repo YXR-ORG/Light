@@ -7,7 +7,7 @@ import { SetModel } from '../../wailsjs/go/handler/ConversationHandler'
 import { ListEnabledModels, ListProviders } from '../../wailsjs/go/handler/ProviderHandler'
 import { ListSkills } from '../../wailsjs/go/handler/SkillHandler'
 import SkillsPanel from './SkillsPanel.vue'
-import type { storage } from '../../wailsjs/go/models'
+import { handler as handlerModels, type storage } from '../../wailsjs/go/models'
 
 const store = useChatStore()
 const input = ref('')
@@ -16,8 +16,35 @@ const showModelPicker = ref(false)
 const showSkillPicker = ref(false)
 const selectedSkillIDs = ref<string[]>([])
 const webSearch = ref(false)
-
 const ignoreContext = computed(() => store.contextCutoffId !== null)
+
+interface Attachment { name: string; mime_type: string; data: string }
+const attachments = ref<Attachment[]>([])
+const fileInputRef = ref<HTMLInputElement | null>(null)
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+
+async function handleFileSelect(e: Event) {
+  const files = (e.target as HTMLInputElement).files
+  if (!files) return
+  for (const file of Array.from(files)) {
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`文件 ${file.name} 超过 10MB 限制`)
+      continue
+    }
+    const buf = await file.arrayBuffer()
+    const bytes = new Uint8Array(buf)
+    let binary = ''
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
+    const b64 = btoa(binary)
+    attachments.value.push({ name: file.name, mime_type: file.type || 'application/octet-stream', data: b64 })
+  }
+  ;(e.target as HTMLInputElement).value = ''
+}
+
+function removeAttachment(idx: number) {
+  attachments.value.splice(idx, 1)
+}
 
 // 已启用供应商的模型列表
 const enabledModels = ref<storage.LLMModel[]>([])
@@ -137,6 +164,8 @@ async function send() {
   showSkills.value = false
   showModelPicker.value = false
   showSkillPicker.value = false
+  const sentAttachments = [...attachments.value]
+  attachments.value = []
   store.resetStream()
 
   store.appendMessage({
@@ -159,7 +188,7 @@ async function send() {
   }, 60000)
 
   try {
-    await StreamChat({
+    await StreamChat(handlerModels.SendMessageRequest.createFrom({
       conversation_id: store.currentConvId,
       content: text,
       provider,
@@ -168,7 +197,8 @@ async function send() {
       web_search: webSearch.value,
       ignore_context: false,
       context_cutoff_id: store.contextCutoffId ?? '',
-    })
+      attachments: sentAttachments,
+    }))
   } catch (e: any) {
     const raw = typeof e === 'object' ? JSON.stringify(e) : String(e)
     const msg = e?.message || e?.Message || raw
@@ -252,6 +282,18 @@ function onKeydown(e: KeyboardEvent) {
       </div>
     </transition>
 
+    <!-- 附件预览区 -->
+    <div v-if="attachments.length > 0" class="attachment-preview">
+      <div v-for="(a, idx) in attachments" :key="idx" class="attachment-chip">
+        <svg v-if="a.mime_type.startsWith('image/')" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span class="attachment-name">{{ a.name }}</span>
+        <button class="attachment-remove" @click="removeAttachment(idx)" title="移除">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+    </div>
+
     <!-- 顶部状态行 -->
     <div class="input-meta" v-if="activeSkillLabel || true">
       <span v-if="activeSkillLabel" class="skill-badge">{{ activeSkillLabel }}</span>
@@ -271,6 +313,16 @@ function onKeydown(e: KeyboardEvent) {
         <button class="btn-icon" :class="{ 'btn-icon--active': showSkills }" @click="toggleSkills" title="技能">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+          </svg>
+        </button>
+        <!-- 文件上传按钮 -->
+        <input ref="fileInputRef" type="file" multiple
+          accept="image/*,.pdf,.txt,.md,.csv,.json,.py,.js,.ts,.go,.java,.html,.css"
+          style="display:none" @change="handleFileSelect" />
+        <button class="btn-attach" @click="fileInputRef?.click()" title="上传文件或图片（最大 10MB）"
+          :class="{ active: attachments.length > 0 }">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
           </svg>
         </button>
         <!-- 忽略上下文按钮 -->
@@ -355,6 +407,42 @@ function onKeydown(e: KeyboardEvent) {
   max-height: 320px;
   overflow-y: auto;
 }
+
+.btn-attach {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  background: transparent; cursor: pointer;
+  color: var(--color-text-3);
+  transition: border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+.btn-attach:hover { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-soft); }
+.btn-attach.active { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-soft); }
+
+.attachment-preview {
+  display: flex; flex-wrap: wrap; gap: var(--space-2);
+  padding: var(--space-2) var(--space-4) 0;
+}
+.attachment-chip {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px var(--space-2);
+  background: var(--color-paper-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  color: var(--color-text-2);
+  max-width: 200px;
+}
+.attachment-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 140px;
+}
+.attachment-remove {
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border: none; background: transparent;
+  color: var(--color-text-3); cursor: pointer; padding: 0; border-radius: 50%;
+}
+.attachment-remove:hover { color: var(--color-danger); background: var(--color-paper-4); }
 
 .btn-ignore-ctx {
   display: flex; align-items: center; justify-content: center;

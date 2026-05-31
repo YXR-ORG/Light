@@ -58,7 +58,7 @@ func DeleteConversation(id string) error {
 	})
 }
 
-func SaveMessage(convID, role, content, thinking, toolCalls, toolResult string) (*Message, error) {
+func SaveMessage(convID, role, content, thinking, toolCalls, toolResult string, attachments ...string) (*Message, error) {
 	m := &Message{
 		ID:             NewID(),
 		ConversationID: convID,
@@ -67,6 +67,9 @@ func SaveMessage(convID, role, content, thinking, toolCalls, toolResult string) 
 		Thinking:       thinking,
 		ToolCalls:      toolCalls,
 		ToolResult:     toolResult,
+	}
+	if len(attachments) > 0 {
+		m.Attachments = attachments[0]
 	}
 	err := DB.Create(m).Error
 	if err == nil {

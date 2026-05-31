@@ -48,6 +48,13 @@ const renderedContent = computed(() => {
 // 思考内容：streaming 时用 prop，历史消息读 msg.thinking
 const thinkingText = computed(() => props.thinking || props.msg.thinking || '')
 const hasThinking = computed(() => !!thinkingText.value)
+
+// 附件元数据
+const attachmentMetas = computed(() => {
+  if (!props.msg.attachments) return []
+  try { return JSON.parse(props.msg.attachments) as { name: string; mime_type: string }[] }
+  catch { return [] }
+})
 </script>
 
 <template>
@@ -71,6 +78,15 @@ const hasThinking = computed(() => !!thinkingText.value)
         </div>
       </div>
 
+      <!-- 附件标签 -->
+      <div v-if="attachmentMetas.length > 0" class="msg-attachments">
+        <div v-for="(a, i) in attachmentMetas" :key="i" class="msg-attachment-chip">
+          <svg v-if="a.mime_type.startsWith('image/')" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span>{{ a.name }}</span>
+        </div>
+      </div>
+
       <!-- 消息正文 -->
       <div class="msg-text" v-if="isUser" v-text="content || ''" />
       <div class="msg-text markdown-body" v-else v-html="renderedContent || ''" />
@@ -80,6 +96,20 @@ const hasThinking = computed(() => !!thinkingText.value)
 </template>
 
 <style scoped>
+.msg-attachments {
+  display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-2);
+}
+.msg-attachment-chip {
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px var(--space-2);
+  background: var(--color-paper-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs); color: var(--color-text-3);
+  max-width: 200px; overflow: hidden;
+}
+.msg-attachment-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .msg-row {
   display: flex;
   gap: var(--space-4);

@@ -1,5 +1,21 @@
 export namespace handler {
 	
+	export class Attachment {
+	    name: string;
+	    mime_type: string;
+	    data: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Attachment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.mime_type = source["mime_type"];
+	        this.data = source["data"];
+	    }
+	}
 	export class SendMessageRequest {
 	    conversation_id: string;
 	    content: string;
@@ -9,6 +25,7 @@ export namespace handler {
 	    web_search: boolean;
 	    ignore_context: boolean;
 	    context_cutoff_id: string;
+	    attachments: Attachment[];
 	
 	    static createFrom(source: any = {}) {
 	        return new SendMessageRequest(source);
@@ -24,7 +41,26 @@ export namespace handler {
 	        this.web_search = source["web_search"];
 	        this.ignore_context = source["ignore_context"];
 	        this.context_cutoff_id = source["context_cutoff_id"];
+	        this.attachments = this.convertValues(source["attachments"], Attachment);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -181,6 +217,7 @@ export namespace storage {
 	    thinking?: string;
 	    tool_calls?: string;
 	    tool_result?: string;
+	    attachments?: string;
 	    // Go type: time
 	    created_at: any;
 	
@@ -197,6 +234,7 @@ export namespace storage {
 	        this.thinking = source["thinking"];
 	        this.tool_calls = source["tool_calls"];
 	        this.tool_result = source["tool_result"];
+	        this.attachments = source["attachments"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	    }
 	

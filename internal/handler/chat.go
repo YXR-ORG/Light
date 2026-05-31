@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -37,15 +39,22 @@ func (h *ChatHandler) SetContext(ctx context.Context) {
 	h.ctx = ctx
 }
 
+type Attachment struct {
+	Name     string `json:"name"`
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"` // base64
+}
+
 type SendMessageRequest struct {
-	ConversationID  string   `json:"conversation_id"`
-	Content         string   `json:"content"`
-	Provider        string   `json:"provider"`
-	Model           string   `json:"model"`
-	SkillIDs        []string `json:"skill_ids"`
-	WebSearch       bool     `json:"web_search"`
-	IgnoreContext   bool     `json:"ignore_context"`
-	ContextCutoffID string   `json:"context_cutoff_id"`
+	ConversationID  string       `json:"conversation_id"`
+	Content         string       `json:"content"`
+	Provider        string       `json:"provider"`
+	Model           string       `json:"model"`
+	SkillIDs        []string     `json:"skill_ids"`
+	WebSearch       bool         `json:"web_search"`
+	IgnoreContext   bool         `json:"ignore_context"`
+	ContextCutoffID string       `json:"context_cutoff_id"`
+	Attachments     []Attachment `json:"attachments"`
 }
 
 type SendMessageResponse struct {
@@ -199,8 +208,23 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 		}
 	}
 
-	if _, err := storage.SaveMessage(req.ConversationID, "user", req.Content, "", "", ""); err != nil {
-		slog.Error("StreamChat save user message failed", "error", err)
+	// Serialize attachment metadata (no base64 data, just name/type/size)
+	attachmentsMeta := ""
+	if len(req.Attachments) > 0 {
+		type meta struct {
+			Name     string `json:"name"`
+			MimeType string `json:"mime_type"`
+		}
+		metas := make([]meta, len(req.Attachments))
+		for i, a := range req.Attachments {
+			metas[i] = meta{Name: a.Name, MimeType: a.MimeType}
+		}
+		if b, err := json.Marshal(metas); err == nil {
+			attachmentsMeta = string(b)
+		}
+	}
+
+	if _, err := storage.SaveMessage(req.ConversationID, "user", req.Content, "", "", attachmentsMeta); err != nil {		slog.Error("StreamChat save user message failed", "error", err)
 	}
 
 	// Check if this is the first user message (for auto title generation)
@@ -237,13 +261,8 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 	})
 
 	if req.IgnoreContext {
-		// Only send the current message, no history
-		einoMsgs = append(einoMsgs, &schema.Message{
-			Role:    schema.User,
-			Content: req.Content,
-		})
+		einoMsgs = append(einoMsgs, buildUserMessage(req.Content, req.Attachments))
 	} else if req.ContextCutoffID != "" {
-		// Only include messages after the cutoff point
 		cutoffPassed := false
 		for _, m := range history {
 			if m.ID == req.ContextCutoffID {
@@ -258,11 +277,16 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 			}
 		}
 	} else {
-		for _, m := range history {
-			einoMsgs = append(einoMsgs, &schema.Message{
-				Role:    storage.ToEinoRole(m.Role),
-				Content: m.Content,
-			})
+		// All history except the last user message (which we rebuild with attachments)
+		for i, m := range history {
+			if i == len(history)-1 && m.Role == "user" {
+				einoMsgs = append(einoMsgs, buildUserMessage(m.Content, req.Attachments))
+			} else {
+				einoMsgs = append(einoMsgs, &schema.Message{
+					Role:    storage.ToEinoRole(m.Role),
+					Content: m.Content,
+				})
+			}
 		}
 	}
 
@@ -318,8 +342,45 @@ func extractTitle(text string, maxChars int) string {
 	}
 	return strings.TrimSpace(string(runes))
 }
-func (h *ChatHandler) runToolLoop(ctx context.Context, messages []*schema.Message) (string, string) {
-	fullContent := ""
+// buildUserMessage constructs a user message, with optional multimodal attachments.
+func buildUserMessage(content string, attachments []Attachment) *schema.Message {
+	if len(attachments) == 0 {
+		return &schema.Message{Role: schema.User, Content: content}
+	}
+	parts := []schema.MessageInputPart{}
+	if content != "" {
+		parts = append(parts, schema.MessageInputPart{
+			Type: schema.ChatMessagePartTypeText,
+			Text: content,
+		})
+	}
+	for _, a := range attachments {
+		if strings.HasPrefix(a.MimeType, "image/") {
+			b64 := a.Data
+			mimeType := a.MimeType
+			parts = append(parts, schema.MessageInputPart{
+				Type: schema.ChatMessagePartTypeImageURL,
+				Image: &schema.MessageInputImage{
+					MessagePartCommon: schema.MessagePartCommon{
+						Base64Data: &b64,
+						MIMEType:   mimeType,
+					},
+				},
+			})
+		} else {
+			decoded, err := base64.StdEncoding.DecodeString(a.Data)
+			if err == nil {
+				parts = append(parts, schema.MessageInputPart{
+					Type: schema.ChatMessagePartTypeText,
+					Text: fmt.Sprintf("\n\n[文件: %s]\n%s", a.Name, string(decoded)),
+				})
+			}
+		}
+	}
+	return &schema.Message{Role: schema.User, UserInputMultiContent: parts}
+}
+
+func (h *ChatHandler) runToolLoop(ctx context.Context, messages []*schema.Message) (string, string) {	fullContent := ""
 	fullThinking := ""
 
 	for loopCount := 0; loopCount < maxToolLoops; loopCount++ {

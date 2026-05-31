@@ -26,6 +26,7 @@ type Message struct {
 	Thinking       string    `gorm:"type:text" json:"thinking,omitempty"`
 	ToolCalls      string    `gorm:"type:text" json:"tool_calls,omitempty"`
 	ToolResult     string    `gorm:"type:text" json:"tool_result,omitempty"`
+	Attachments    string    `gorm:"type:text" json:"attachments,omitempty"` // JSON metadata only
 	CreatedAt      time.Time `json:"created_at"`
 }
 
