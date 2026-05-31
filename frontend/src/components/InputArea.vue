@@ -300,6 +300,17 @@ function onKeydown(e: KeyboardEvent) {
     </div>
 
     <div class="input-inner">
+      <!-- 附件上传按钮：textarea 内左下角 -->
+      <input ref="fileInputRef" type="file" multiple
+        accept="image/*,.pdf,.txt,.md,.csv,.json,.py,.js,.ts,.go,.java,.html,.css"
+        style="display:none" @change="handleFileSelect" />
+      <button class="btn-attach-inner" @click="fileInputRef?.click()"
+        :title="'上传文件或图片（最大 10MB）'"
+        :class="{ active: attachments.length > 0 }">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+        </svg>
+      </button>
       <textarea
         v-model="input"
         placeholder="输入消息..."
@@ -307,22 +318,13 @@ function onKeydown(e: KeyboardEvent) {
         @keydown="onKeydown"
         @focus="showSkills = false; showModelPicker = false"
         rows="1"
+        class="has-attach-btn"
       />
       <div class="input-actions">
         <!-- 技能按钮 -->
         <button class="btn-icon" :class="{ 'btn-icon--active': showSkills }" @click="toggleSkills" title="技能">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-          </svg>
-        </button>
-        <!-- 文件上传按钮 -->
-        <input ref="fileInputRef" type="file" multiple
-          accept="image/*,.pdf,.txt,.md,.csv,.json,.py,.js,.ts,.go,.java,.html,.css"
-          style="display:none" @change="handleFileSelect" />
-        <button class="btn-attach" @click="fileInputRef?.click()" title="上传文件或图片（最大 10MB）"
-          :class="{ active: attachments.length > 0 }">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
           </svg>
         </button>
         <!-- 忽略上下文按钮 -->
@@ -342,7 +344,7 @@ function onKeydown(e: KeyboardEvent) {
           class="btn-web-search"
           :class="{ active: webSearch }"
           @click="webSearch = !webSearch"
-          :title="webSearch ? '关闭联网搜索' : '开启联网搜索（DuckDuckGo）'"
+          :title="webSearch ? '关闭联网搜索' : '开启联网搜索'"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
             <circle cx="12" cy="12" r="10"/>
@@ -418,6 +420,23 @@ function onKeydown(e: KeyboardEvent) {
 }
 .btn-attach:hover { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-soft); }
 .btn-attach.active { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-soft); }
+
+.btn-attach-inner {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-3);
+  z-index: 1;
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-text-3);
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+.btn-attach-inner:hover { color: var(--color-accent); background: var(--color-accent-soft); }
+.btn-attach-inner.active { color: var(--color-accent); }
 
 .attachment-preview {
   display: flex; flex-wrap: wrap; gap: var(--space-2);
@@ -565,14 +584,38 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .input-inner {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
-  padding: var(--space-2);
-  background: var(--color-paper);
+  background: var(--color-paper-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
-  transition: border-color var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal) var(--ease-out);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-2);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.input-inner:focus-within {
+  border-color: var(--color-accent);
+}
+
+textarea {
+  flex: 1;
+  border: none;
+  background: transparent;
+  resize: none;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text);
+  outline: none;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+
+textarea.has-attach-btn {
+  padding-left: 32px;
 }
 .input-inner:focus-within {
   border-color: var(--color-accent);
