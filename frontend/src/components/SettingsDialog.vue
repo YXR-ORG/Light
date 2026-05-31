@@ -255,6 +255,31 @@ const webdavBackupMsg = ref('')
 const webdavBackups = ref<handler.BackupFile[]>([])
 const webdavRestoring = ref('')
 const webdavDeleting = ref('')
+const webdavListMsg = ref('')
+const webdavListLoading = ref(false)
+const backupPage = ref(1)
+const backupPageSize = 5
+const backupPageCount = computed(() => Math.ceil(webdavBackups.value.length / backupPageSize))
+const pagedBackups = computed(() =>
+  webdavBackups.value.slice((backupPage.value - 1) * backupPageSize, backupPage.value * backupPageSize)
+)
+const showConfirm = ref(false)
+const confirmMsg = ref('')
+const confirmAction = ref<(() => void) | null>(null)
+
+function openConfirm(msg: string, action: () => void) {
+  confirmMsg.value = msg
+  confirmAction.value = action
+  showConfirm.value = true
+}
+function doConfirm() {
+  showConfirm.value = false
+  confirmAction.value?.()
+}
+function cancelConfirm() {
+  showConfirm.value = false
+  confirmAction.value = null
+}
 
 onMounted(async () => {
   tavilyKey.value = await GetSetting('tavily_api_key').catch(() => '')
@@ -287,33 +312,47 @@ async function doBackup() {
 }
 
 async function loadBackups() {
-  webdavBackups.value = await ListBackups().catch(() => [])
+  webdavListLoading.value = true
+  webdavListMsg.value = ''
+  backupPage.value = 1
+  try {
+    webdavBackups.value = await ListBackups()
+    if (webdavBackups.value.length === 0) webdavListMsg.value = '暂无备份文件'
+  } catch (e: any) {
+    webdavListMsg.value = '✗ 获取列表失败: ' + (e?.message || String(e))
+    webdavBackups.value = []
+  } finally {
+    webdavListLoading.value = false
+  }
 }
 
 async function doRestore(filename: string) {
-  if (!confirm(`确认从 ${filename} 恢复？当前数据将被覆盖，恢复后需要重启应用。`)) return
-  webdavRestoring.value = filename
-  try {
-    await Restore(filename)
-    alert('恢复成功，请重启应用以加载新数据。')
-  } catch (e: any) {
-    alert('恢复失败: ' + (e?.message || String(e)))
-  } finally {
-    webdavRestoring.value = ''
-  }
+  openConfirm(`确认从 ${filename} 恢复？当前数据将被覆盖，恢复后需要重启应用。`, async () => {
+    webdavRestoring.value = filename
+    webdavBackupMsg.value = ''
+    try {
+      await Restore(filename)
+      webdavBackupMsg.value = '✓ 恢复成功，请重启应用以加载新数据'
+    } catch (e: any) {
+      webdavBackupMsg.value = '✗ 恢复失败: ' + (e?.message || String(e))
+    } finally {
+      webdavRestoring.value = ''
+    }
+  })
 }
 
 async function doDeleteBackup(filename: string) {
-  if (!confirm(`确认删除备份 ${filename}？此操作不可恢复。`)) return
-  webdavDeleting.value = filename
-  try {
-    await DeleteBackup(filename)
-    await loadBackups()
-  } catch (e: any) {
-    alert('删除失败: ' + (e?.message || String(e)))
-  } finally {
-    webdavDeleting.value = ''
-  }
+  openConfirm(`确认删除备份 ${filename}？此操作不可恢复。`, async () => {
+    webdavDeleting.value = filename
+    try {
+      await DeleteBackup(filename)
+      await loadBackups()
+    } catch (e: any) {
+      webdavBackupMsg.value = '✗ 删除失败: ' + (e?.message || String(e))
+    } finally {
+      webdavDeleting.value = ''
+    }
+  })
 }
 
 function formatSize(bytes: number): string {
@@ -382,7 +421,7 @@ function formatSize(bytes: number): string {
 
               <div class="setting-section">
                 <div class="setting-section-title">数据备份（WebDAV）</div>
-                <div class="setting-section-desc">将本地数据库备份到 WebDAV 服务器（支持坚果云、Nextcloud 等）。</div>
+                <div class="setting-section-desc">备份内容包含全部聊天记录、API Key、模型配置、智能体、Skills 等所有本地数据。支持坚果云、Nextcloud、Alist 等 WebDAV 服务。</div>
                 <div class="form-fields" style="margin-top:var(--space-3)">
                   <div class="field">
                     <label>服务器地址</label>
@@ -409,11 +448,15 @@ function formatSize(bytes: number): string {
                   <button class="btn btn-primary" @click="doBackup" :disabled="webdavBacking">
                     {{ webdavBacking ? '备份中...' : '立即备份' }}
                   </button>
-                  <button class="btn btn-secondary" @click="loadBackups">查看备份列表</button>
+                  <button class="btn btn-secondary" @click="loadBackups" :disabled="webdavListLoading">
+                    {{ webdavListLoading ? '加载中...' : '查看备份列表' }}
+                  </button>
                   <span v-if="webdavBackupMsg" class="backup-msg" :class="{ error: webdavBackupMsg.startsWith('✗') }">
                     {{ webdavBackupMsg }}
                   </span>
                 </div>
+
+                <div v-if="webdavListMsg && webdavBackups.length === 0" class="backup-empty">{{ webdavListMsg }}</div>
 
                 <div v-if="webdavBackups.length > 0" class="backup-list">
                   <div class="backup-list-header">
@@ -422,20 +465,34 @@ function formatSize(bytes: number): string {
                     <span>时间</span>
                     <span>操作</span>
                   </div>
-                  <div v-for="f in webdavBackups" :key="f.name" class="backup-item">
+                  <div v-for="f in pagedBackups" :key="f.name" class="backup-item">
                     <span class="backup-filename">{{ f.name }}</span>
                     <span class="backup-size">{{ formatSize(f.size) }}</span>
                     <span class="backup-time">{{ f.mod_time }}</span>
                     <div class="backup-ops">
                       <button class="btn btn-sm btn-secondary" @click="doRestore(f.name)"
-                        :disabled="webdavRestoring === f.name">
+                        :disabled="!!webdavRestoring">
                         {{ webdavRestoring === f.name ? '恢复中...' : '恢复' }}
                       </button>
                       <button class="btn btn-sm btn-danger" @click="doDeleteBackup(f.name)"
-                        :disabled="webdavDeleting === f.name">
+                        :disabled="!!webdavDeleting">
                         {{ webdavDeleting === f.name ? '删除中...' : '删除' }}
                       </button>
                     </div>
+                  </div>
+                  <div v-if="backupPageCount > 1" class="backup-pagination">
+                    <button class="btn btn-sm btn-secondary" :disabled="backupPage <= 1" @click="backupPage--">上一页</button>
+                    <span class="page-info">{{ backupPage }} / {{ backupPageCount }}</span>
+                    <button class="btn btn-sm btn-secondary" :disabled="backupPage >= backupPageCount" @click="backupPage++">下一页</button>
+                  </div>
+                </div>
+
+                <!-- 内联确认弹窗 -->
+                <div v-if="showConfirm" class="inline-confirm">
+                  <div class="inline-confirm-msg">{{ confirmMsg }}</div>
+                  <div class="inline-confirm-actions">
+                    <button class="btn btn-sm btn-danger" @click="doConfirm">确认</button>
+                    <button class="btn btn-sm btn-secondary" @click="cancelConfirm">取消</button>
                   </div>
                 </div>
               </div>
@@ -832,6 +889,21 @@ function formatSize(bytes: number): string {
 .backup-time { font-size: var(--text-xs); color: var(--color-text-3); }
 .backup-ops { display: flex; gap: var(--space-1); }
 .btn-sm { padding: 3px var(--space-2); font-size: var(--text-xs); }
+
+.backup-empty { font-size: var(--text-xs); color: var(--color-text-3); padding: var(--space-3) 0; }
+.backup-pagination { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--color-border); }
+.page-info { font-size: var(--text-xs); color: var(--color-text-3); flex: 1; text-align: center; }
+
+.inline-confirm {
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: oklch(0.98 0.02 25);
+  border: 1px solid oklch(0.85 0.08 25);
+  border-radius: var(--radius-md);
+}
+[data-theme="dark"] .inline-confirm { background: oklch(0.2 0.03 25); border-color: oklch(0.35 0.08 25); }
+.inline-confirm-msg { font-size: var(--text-sm); color: var(--color-text); margin-bottom: var(--space-2); line-height: 1.6; }
+.inline-confirm-actions { display: flex; gap: var(--space-2); }
 
 /* ── Skills 广场 ── */
 .skills-market { display: flex; flex-direction: column; gap: var(--space-3); height: 100%; overflow-y: auto; }
