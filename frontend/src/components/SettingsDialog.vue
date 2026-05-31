@@ -9,11 +9,12 @@ import {
 import { ListAgents, SaveAgent, DeleteAgent } from '../../wailsjs/go/handler/AgentHandler'
 import { ListSkills, SaveSkill, ToggleSkill, DeleteSkill, ImportSkillZip } from '../../wailsjs/go/handler/SkillHandler'
 import { Get as GetSetting, Set as SetSetting } from '../../wailsjs/go/handler/SettingsHandler'
+import AboutPanel from './AboutPanel.vue'
 import type { storage } from '../../wailsjs/go/models'
 
 const settingsStore = useSettingsStore()
 
-type MainTab = 'providers' | 'agents' | 'skills' | 'mcp' | 'general'
+type MainTab = 'providers' | 'agents' | 'skills' | 'mcp' | 'general' | 'about'
 const mainTab = ref<MainTab>('providers')
 
 const PROVIDER_TYPES = [
@@ -277,7 +278,11 @@ async function saveTavilyKey() {
             </button>
             <button class="nav-item" :class="{ active: mainTab === 'mcp' }" @click="mainTab = 'mcp'">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-              MCP 配置
+              MCP
+            </button>
+            <button class="nav-item" :class="{ active: mainTab === 'about' }" @click="mainTab = 'about'">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              关于
             </button>
           </nav>
           <div class="panel">
@@ -531,6 +536,9 @@ async function saveTavilyKey() {
             <div v-else-if="mainTab === 'mcp'" class="mcp-panel">
               <MCPConfig />
             </div>
+
+            <!-- 关于 -->
+            <AboutPanel v-else-if="mainTab === 'about'" />
           </div>
         </div>
         <div class="modal-footer">

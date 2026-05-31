@@ -9,6 +9,9 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 )
 
+// Version is injected at build time via -ldflags "-X main.Version=x.y.z"
+var Version = "dev"
+
 //go:embed all:frontend/dist
 var assets embed.FS
 
@@ -27,6 +30,7 @@ func main() {
 		},
 		OnStartup: app.startup,
 		Bind: []interface{}{
+			app,
 			app.chatHandler,
 			app.conversationHandler,
 			app.settingsHandler,

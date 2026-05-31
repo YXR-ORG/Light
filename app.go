@@ -35,6 +35,10 @@ func NewApp() *App {
 	}
 }
 
+func (a *App) GetVersion() string {
+	return Version
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.chatHandler.SetContext(ctx)
