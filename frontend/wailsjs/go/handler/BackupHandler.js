@@ -6,6 +6,10 @@ export function Backup() {
   return window['go']['handler']['BackupHandler']['Backup']();
 }
 
+export function DeleteBackup(arg1) {
+  return window['go']['handler']['BackupHandler']['DeleteBackup'](arg1);
+}
+
 export function GetConfig() {
   return window['go']['handler']['BackupHandler']['GetConfig']();
 }

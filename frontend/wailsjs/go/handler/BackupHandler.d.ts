@@ -4,9 +4,11 @@ import {handler} from '../models';
 
 export function Backup():Promise<void>;
 
+export function DeleteBackup(arg1:string):Promise<void>;
+
 export function GetConfig():Promise<handler.WebDAVConfig>;
 
-export function ListBackups():Promise<Array<string>>;
+export function ListBackups():Promise<Array<handler.BackupFile>>;
 
 export function Restore(arg1:string):Promise<void>;
 

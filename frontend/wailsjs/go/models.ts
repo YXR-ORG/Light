@@ -16,6 +16,22 @@ export namespace handler {
 	        this.data = source["data"];
 	    }
 	}
+	export class BackupFile {
+	    name: string;
+	    size: number;
+	    mod_time: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BackupFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.mod_time = source["mod_time"];
+	    }
+	}
 	export class SendMessageRequest {
 	    conversation_id: string;
 	    content: string;

@@ -9,9 +9,9 @@ import {
 import { ListAgents, SaveAgent, DeleteAgent } from '../../wailsjs/go/handler/AgentHandler'
 import { ListSkills, SaveSkill, ToggleSkill, DeleteSkill, ImportSkillZip } from '../../wailsjs/go/handler/SkillHandler'
 import { Get as GetSetting, Set as SetSetting } from '../../wailsjs/go/handler/SettingsHandler'
-import { SaveConfig, GetConfig, Backup, ListBackups, Restore } from '../../wailsjs/go/handler/BackupHandler'
+import { SaveConfig, GetConfig, Backup, ListBackups, Restore, DeleteBackup } from '../../wailsjs/go/handler/BackupHandler'
 import AboutPanel from './AboutPanel.vue'
-import type { storage } from '../../wailsjs/go/models'
+import type { storage, handler } from '../../wailsjs/go/models'
 
 const settingsStore = useSettingsStore()
 
@@ -252,8 +252,9 @@ const webdavPath = ref('/Light/')
 const webdavConfigSaved = ref(false)
 const webdavBacking = ref(false)
 const webdavBackupMsg = ref('')
-const webdavBackups = ref<string[]>([])
+const webdavBackups = ref<handler.BackupFile[]>([])
 const webdavRestoring = ref('')
+const webdavDeleting = ref('')
 
 onMounted(async () => {
   tavilyKey.value = await GetSetting('tavily_api_key').catch(() => '')
@@ -300,6 +301,25 @@ async function doRestore(filename: string) {
   } finally {
     webdavRestoring.value = ''
   }
+}
+
+async function doDeleteBackup(filename: string) {
+  if (!confirm(`确认删除备份 ${filename}？此操作不可恢复。`)) return
+  webdavDeleting.value = filename
+  try {
+    await DeleteBackup(filename)
+    await loadBackups()
+  } catch (e: any) {
+    alert('删除失败: ' + (e?.message || String(e)))
+  } finally {
+    webdavDeleting.value = ''
+  }
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB'
 }
 </script>
 
@@ -396,11 +416,26 @@ async function doRestore(filename: string) {
                 </div>
 
                 <div v-if="webdavBackups.length > 0" class="backup-list">
-                  <div v-for="f in webdavBackups" :key="f" class="backup-item">
-                    <span class="backup-filename">{{ f }}</span>
-                    <button class="btn btn-sm btn-danger" @click="doRestore(f)" :disabled="webdavRestoring === f">
-                      {{ webdavRestoring === f ? '恢复中...' : '恢复' }}
-                    </button>
+                  <div class="backup-list-header">
+                    <span>文件名</span>
+                    <span>大小</span>
+                    <span>时间</span>
+                    <span>操作</span>
+                  </div>
+                  <div v-for="f in webdavBackups" :key="f.name" class="backup-item">
+                    <span class="backup-filename">{{ f.name }}</span>
+                    <span class="backup-size">{{ formatSize(f.size) }}</span>
+                    <span class="backup-time">{{ f.mod_time }}</span>
+                    <div class="backup-ops">
+                      <button class="btn btn-sm btn-secondary" @click="doRestore(f.name)"
+                        :disabled="webdavRestoring === f.name">
+                        {{ webdavRestoring === f.name ? '恢复中...' : '恢复' }}
+                      </button>
+                      <button class="btn btn-sm btn-danger" @click="doDeleteBackup(f.name)"
+                        :disabled="webdavDeleting === f.name">
+                        {{ webdavDeleting === f.name ? '删除中...' : '删除' }}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -775,14 +810,27 @@ async function doRestore(filename: string) {
 .backup-msg { font-size: var(--text-xs); color: var(--color-success); }
 .backup-msg.error { color: var(--color-danger); }
 
-.backup-list { margin-top: var(--space-3); display: flex; flex-direction: column; gap: var(--space-1); }
-.backup-item {
-  display: flex; align-items: center; justify-content: space-between;
+.backup-list { margin-top: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
+.backup-list-header {
+  display: grid; grid-template-columns: 1fr 80px 160px 140px;
   padding: var(--space-2) var(--space-3);
-  background: var(--color-paper-2); border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
+  background: var(--color-paper-3);
+  font-size: var(--text-xs); font-weight: 600; color: var(--color-text-3);
+  border-bottom: 1px solid var(--color-border);
 }
-.backup-filename { font-size: var(--text-xs); color: var(--color-text-2); font-family: var(--font-mono); }
+.backup-item {
+  display: grid; grid-template-columns: 1fr 80px 160px 140px;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.backup-item:last-child { border-bottom: none; }
+.backup-item:hover { background: var(--color-paper-2); }
+.backup-filename { font-size: var(--text-xs); color: var(--color-text-2); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backup-size { font-size: var(--text-xs); color: var(--color-text-3); }
+.backup-time { font-size: var(--text-xs); color: var(--color-text-3); }
+.backup-ops { display: flex; gap: var(--space-1); }
 .btn-sm { padding: 3px var(--space-2); font-size: var(--text-xs); }
 
 /* ── Skills 广场 ── */

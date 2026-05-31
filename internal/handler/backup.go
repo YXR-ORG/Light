@@ -94,7 +94,13 @@ func (h *BackupHandler) Backup() error {
 	return nil
 }
 
-func (h *BackupHandler) ListBackups() ([]string, error) {
+type BackupFile struct {
+	Name    string `json:"name"`
+	Size    int64  `json:"size"`
+	ModTime string `json:"mod_time"`
+}
+
+func (h *BackupHandler) ListBackups() ([]BackupFile, error) {
 	c, remotePath, err := newClient()
 	if err != nil {
 		return nil, err
@@ -105,15 +111,35 @@ func (h *BackupHandler) ListBackups() ([]string, error) {
 		return nil, fmt.Errorf("读取目录失败: %w", err)
 	}
 
-	var names []string
+	var result []BackupFile
 	for _, f := range files {
 		if !f.IsDir() && strings.HasSuffix(f.Name(), ".db") {
-			names = append(names, f.Name())
+			result = append(result, BackupFile{
+				Name:    f.Name(),
+				Size:    f.Size(),
+				ModTime: f.ModTime().Format("2006-01-02 15:04:05"),
+			})
 		}
 	}
 	// Sort descending (newest first)
-	sort.Sort(sort.Reverse(sort.StringSlice(names)))
-	return names, nil
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name > result[j].Name
+	})
+	return result, nil
+}
+
+func (h *BackupHandler) DeleteBackup(filename string) error {
+	c, remotePath, err := newClient()
+	if err != nil {
+		return err
+	}
+	if !strings.HasSuffix(remotePath, "/") {
+		remotePath += "/"
+	}
+	if err := c.Remove(remotePath + filename); err != nil {
+		return fmt.Errorf("删除失败: %w", err)
+	}
+	return nil
 }
 
 func (h *BackupHandler) Restore(filename string) error {
