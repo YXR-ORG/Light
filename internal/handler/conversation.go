@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"wails-ai-chat/internal/storage"
+	"light-ai/internal/storage"
 )
 
 type ConversationHandler struct{}
@@ -26,8 +26,23 @@ func (h *ConversationHandler) Rename(id, title string) error {
 	return storage.UpdateConversationTitle(id, title)
 }
 
+func (h *ConversationHandler) Search(query string) ([]storage.Conversation, error) {
+	if query == "" {
+		return storage.ListConversations()
+	}
+	return storage.SearchConversations(query)
+}
+
 func (h *ConversationHandler) Delete(id string) error {
 	return storage.DeleteConversation(id)
+}
+
+func (h *ConversationHandler) SetSystemPrompt(id, prompt string) error {
+	return storage.UpdateSystemPrompt(id, prompt)
+}
+
+func (h *ConversationHandler) SetModel(id, provider, model string) error {
+	return storage.UpdateConversationModel(id, provider, model)
 }
 
 func (h *ConversationHandler) GetMessages(convID string) ([]storage.Message, error) {

@@ -4,5 +4,11 @@ import { createPinia } from 'pinia'
 import './style.css'
 
 const app = createApp(App)
-app.use(createPinia())
+const pinia = createPinia()
+app.use(pinia)
+
+// Init theme before mount to avoid flash
+import { useThemeStore } from './stores/theme'
+useThemeStore(pinia)
+
 app.mount('#app')

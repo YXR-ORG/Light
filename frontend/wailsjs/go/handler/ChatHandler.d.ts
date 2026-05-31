@@ -3,6 +3,8 @@
 import {context} from '../models';
 import {handler} from '../models';
 
-export function SendMessage(arg1:context.Context,arg2:handler.SendMessageRequest):Promise<handler.SendMessageResponse>;
+export function CancelStream():Promise<void>;
 
-export function StreamChat(arg1:context.Context,arg2:handler.SendMessageRequest):Promise<void>;
+export function SetContext(arg1:context.Context):Promise<void>;
+
+export function StreamChat(arg1:handler.SendMessageRequest):Promise<void>;

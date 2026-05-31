@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"wails-ai-chat/internal/storage"
+	"light-ai/internal/storage"
 )
 
 type SettingsHandler struct{}

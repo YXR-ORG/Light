@@ -33,6 +33,23 @@ func UpdateConversationTitle(id, title string) error {
 		Updates(map[string]any{"title": title, "updated_at": time.Now()}).Error
 }
 
+func SearchConversations(query string) ([]Conversation, error) {
+	var list []Conversation
+	err := DB.Where("title LIKE ?", "%"+query+"%").
+		Order("updated_at DESC").Find(&list).Error
+	return list, err
+}
+
+func UpdateSystemPrompt(id, prompt string) error {
+	return DB.Model(&Conversation{}).Where("id = ?", id).
+		Updates(map[string]any{"system_prompt": prompt, "updated_at": time.Now()}).Error
+}
+
+func UpdateConversationModel(id, provider, model string) error {
+	return DB.Model(&Conversation{}).Where("id = ?", id).
+		Updates(map[string]any{"provider": provider, "model": model, "updated_at": time.Now()}).Error
+}
+
 func DeleteConversation(id string) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		tx.Where("conversation_id = ?", id).Delete(&Message{})
@@ -41,12 +58,13 @@ func DeleteConversation(id string) error {
 	})
 }
 
-func SaveMessage(convID, role, content, toolCalls, toolResult string) (*Message, error) {
+func SaveMessage(convID, role, content, thinking, toolCalls, toolResult string) (*Message, error) {
 	m := &Message{
 		ID:             NewID(),
 		ConversationID: convID,
 		Role:           role,
 		Content:        content,
+		Thinking:       thinking,
 		ToolCalls:      toolCalls,
 		ToolResult:     toolResult,
 	}

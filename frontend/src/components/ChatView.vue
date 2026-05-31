@@ -24,7 +24,7 @@ const store = useChatStore()
       <div class="welcome-icon">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       </div>
-      <h1 class="welcome-title">AI Chat</h1>
+      <h1 class="welcome-title">Light</h1>
       <p class="welcome-desc">选择一个对话或新建一个开始聊天</p>
       <div class="welcome-shortcuts">
         <kbd>Enter</kbd><span>发送</span>

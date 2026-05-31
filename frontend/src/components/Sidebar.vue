@@ -1,22 +1,60 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { useSettingsStore } from '../stores/settings'
+import { useThemeStore } from '../stores/theme'
 import ConversationItem from './ConversationItem.vue'
-import {
-  List, Create, Delete,
-} from '../../wailsjs/go/handler/ConversationHandler'
+import { Create, Delete, List, Search, GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
+import { Get } from '../../wailsjs/go/handler/SettingsHandler'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
 
 const store = useChatStore()
 const settingsStore = useSettingsStore()
+const themeStore = useThemeStore()
 
-onMounted(loadConversations)
+const themeIcon = computed(() => themeStore.mode)
+const themeTitle = computed(() => ({
+  light: '浅色模式（点击切换）',
+  dark: '深色模式（点击切换）',
+  system: '跟随系统（点击切换）',
+}[themeStore.mode]))
+
+const searchQuery = ref('')
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let unsubConvUpdated: (() => void) | null = null
+
+onMounted(() => {
+  loadConversations()
+  unsubConvUpdated = EventsOn('conversation:updated', handleConversationUpdated)
+})
+
+onUnmounted(() => {
+  if (unsubConvUpdated) unsubConvUpdated()
+})
+
+async function handleConversationUpdated(_convId: string) {
+  try {
+    store.setConversations(await List())
+  } catch { /* ignore */ }
+}
 
 async function loadConversations() {
   try {
     store.setConversations(await List())
   } catch { /* ignore */ }
 }
+
+watch(searchQuery, (q) => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(async () => {
+    try {
+      store.setConversations(await Search(q))
+    } catch {
+      // fallback: show all
+      try { store.setConversations(await List()) } catch { /* ignore */ }
+    }
+  }, 300)
+})
 
 async function selectConv(id: string) {
   store.setCurrentConv(id)
@@ -30,39 +68,93 @@ async function deleteConv(id: string) {
     store.setCurrentConv(null)
     store.setMessages([])
   }
-  loadConversations()
+  // reload respecting current search
+  try {
+    store.setConversations(await Search(searchQuery.value))
+  } catch { /* ignore */ }
 }
 
 async function newChat() {
-  const conv = await Create('openai', 'gpt-4o')
+  const provider = await Get('default_provider').catch(() => 'openai') || 'openai'
+  const model = await Get('default_model').catch(() => 'gpt-4o') || 'gpt-4o'
+  const conv = await Create(provider, model)
   store.setConversations([conv, ...store.conversations])
   store.setCurrentConv(conv.id)
   store.setMessages([])
 }
-
-import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 </script>
 
 <template>
   <aside class="sidebar">
     <div class="sidebar-header">
-      <span class="sidebar-title">对话</span>
+      <div class="app-brand">
+        <!-- Light icon: radiating rays -->
+        <svg class="app-logo" width="22" height="22" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="32" cy="32" r="10" fill="#ffe066"/>
+          <circle cx="32" cy="32" r="6" fill="#fff"/>
+          <g stroke="#ffe066" stroke-linecap="round">
+            <line x1="32" y1="4"  x2="32" y2="14" stroke-width="3.5" opacity="0.9"/>
+            <line x1="32" y1="50" x2="32" y2="60" stroke-width="3.5" opacity="0.9"/>
+            <line x1="4"  y1="32" x2="14" y2="32" stroke-width="3.5" opacity="0.9"/>
+            <line x1="50" y1="32" x2="60" y2="32" stroke-width="3.5" opacity="0.9"/>
+            <line x1="11.5" y1="11.5" x2="18.5" y2="18.5" stroke-width="2.5" opacity="0.6"/>
+            <line x1="45.5" y1="45.5" x2="52.5" y2="52.5" stroke-width="2.5" opacity="0.6"/>
+            <line x1="52.5" y1="11.5" x2="45.5" y2="18.5" stroke-width="2.5" opacity="0.6"/>
+            <line x1="18.5" y1="45.5" x2="11.5" y2="52.5" stroke-width="2.5" opacity="0.6"/>
+          </g>
+        </svg>
+        <span class="app-name">Light</span>
+      </div>
       <button class="btn-new" @click="newChat" title="新建对话">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="search-wrap">
+      <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      <input
+        v-model="searchQuery"
+        class="search-input"
+        type="text"
+        placeholder="搜索对话…"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''" title="清除">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
     </div>
     <div class="conv-list">
       <ConversationItem
         v-for="c in store.conversations" :key="c.id"
         :conv="c" :active="c.id === store.currentConvId"
+        :highlight="searchQuery"
         @select="selectConv" @delete="deleteConv"
       />
-      <div v-if="!store.conversations.length" class="empty-list">暂无对话</div>
+      <div v-if="!store.conversations.length" class="empty-list">
+        {{ searchQuery ? '无匹配对话' : '暂无对话' }}
+      </div>
     </div>
     <div class="sidebar-footer">
       <button class="btn-settings" @click="settingsStore.setOpen(true)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" stroke="currentColor" stroke-width="1.3"/><path d="M13.5 8a5.5 5.5 0 0 1-.1 1l1.5 1.2-1.3 2.3-1.8-.4a5.5 5.5 0 0 1-1.8 1L9.5 15h-3l-.5-1.9a5.5 5.5 0 0 1-1.8-1l-1.8.4L1 10.2 2.6 9A5.5 5.5 0 0 1 2.5 8c0-.34.03-.67.1-1L1 5.8l1.3-2.3 1.8.4a5.5 5.5 0 0 1 1.8-1L6.5 1h3l.5 1.9a5.5 5.5 0 0 1 1.8 1l1.8-.4L15 5.8 13.4 7c.07.33.1.66.1 1Z" stroke="currentColor" stroke-width="1.3"/></svg>
         设置
+      </button>
+      <button class="btn-theme" @click="themeStore.toggle()" :title="themeTitle">
+        <!-- sun: light mode -->
+        <svg v-if="themeStore.mode === 'light'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+        </svg>
+        <!-- moon: dark mode -->
+        <svg v-else-if="themeStore.mode === 'dark'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+        <!-- monitor: system mode -->
+        <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+        </svg>
       </button>
     </div>
   </aside>
@@ -84,13 +176,29 @@ import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
   align-items: center;
   justify-content: space-between;
   padding: var(--space-4) var(--space-5);
+  padding-top: calc(var(--space-4) + 20px); /* leave room for macOS traffic lights */
   border-bottom: 1px solid var(--color-border);
 }
 
-.sidebar-title {
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.app-logo {
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 4px oklch(0.85 0.18 85 / 0.5));
+}
+
+.app-name {
   font-size: var(--text-lg);
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #ffe066 0%, #ff9500 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .btn-new {
@@ -109,6 +217,67 @@ import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 
 .btn-new:hover { background: var(--color-accent-2); }
 
+/* ── Search bar ── */
+.search-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) var(--space-3);
+  padding: 0 var(--space-2);
+  height: 32px;
+  background: var(--color-paper-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--duration-fast) var(--ease-out),
+              background var(--duration-fast) var(--ease-out);
+}
+
+.search-wrap:focus-within {
+  border-color: var(--color-accent);
+  background: var(--color-paper);
+}
+
+.search-icon {
+  flex-shrink: 0;
+  color: var(--color-text-3);
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  outline: none;
+}
+
+.search-input::placeholder {
+  color: var(--color-text-3);
+}
+
+.search-clear {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-3);
+  cursor: pointer;
+  padding: 0;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.search-clear:hover {
+  background: var(--color-paper-4);
+  color: var(--color-text);
+}
+
 .conv-list {
   flex: 1;
   overflow-y: auto;
@@ -125,10 +294,13 @@ import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 .sidebar-footer {
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 .btn-settings {
-  width: 100%;
+  flex: 1;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -143,4 +315,21 @@ import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 }
 
 .btn-settings:hover { background: var(--color-sidebar-hover); color: var(--color-text); }
+
+.btn-theme {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-3);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.btn-theme:hover { background: var(--color-sidebar-hover); color: var(--color-text); }
 </style>

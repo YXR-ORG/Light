@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { storage } from '../../wailsjs/go/models'
 
 const props = defineProps<{
   conv: storage.Conversation
   active: boolean
+  highlight?: string
 }>()
 
 const emit = defineEmits<{
@@ -13,6 +15,23 @@ const emit = defineEmits<{
 
 function onClick() { emit('select', props.conv.id) }
 function onDelete(e: MouseEvent) { e.stopPropagation(); emit('delete', props.conv.id) }
+
+const titleHtml = computed(() => {
+  const title = props.conv.title
+  const q = props.highlight?.trim()
+  if (!q) return escapeHtml(title)
+  const idx = title.toLowerCase().indexOf(q.toLowerCase())
+  if (idx === -1) return escapeHtml(title)
+  return (
+    escapeHtml(title.slice(0, idx)) +
+    `<mark>${escapeHtml(title.slice(idx, idx + q.length))}</mark>` +
+    escapeHtml(title.slice(idx + q.length))
+  )
+})
+
+function escapeHtml(s: string) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
 </script>
 
 <template>
@@ -21,7 +40,7 @@ function onDelete(e: MouseEvent) { e.stopPropagation(); emit('delete', props.con
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
     </div>
     <div class="conv-body">
-      <div class="conv-title">{{ conv.title }}</div>
+      <div class="conv-title" v-html="titleHtml"></div>
       <div class="conv-meta">{{ conv.provider }} · {{ conv.model }}</div>
     </div>
     <button class="btn-delete" @click="onDelete" title="删除">
@@ -103,4 +122,11 @@ function onDelete(e: MouseEvent) { e.stopPropagation(); emit('delete', props.con
 
 .conv-item:hover .btn-delete { opacity: 1; }
 .btn-delete:hover { background: var(--color-paper-4); color: var(--color-danger); }
+
+.conv-title mark {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-2);
+  border-radius: 2px;
+  padding: 0 1px;
+}
 </style>

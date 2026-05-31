@@ -2,8 +2,12 @@
 import { useChatStore } from '../stores/chat'
 import MessageItem from './MessageItem.vue'
 import { storage as models } from '../../wailsjs/go/models'
+import { ref, watch, nextTick } from 'vue'
 
 const store = useChatStore()
+const listRef = ref<HTMLElement | null>(null)
+let userScrolled = false
+let scrollTimer: ReturnType<typeof setTimeout> | null = null
 
 function makeStreamMsg(content: string) {
   const m = new models.Message({})
@@ -13,28 +17,111 @@ function makeStreamMsg(content: string) {
   m.conversation_id = ''
   return m
 }
+
+function isAtBottom(): boolean {
+  const el = listRef.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 60
+}
+
+function scrollToBottom(force = false) {
+  if (!force && userScrolled) return
+  nextTick(() => {
+    const el = listRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+function onScroll() {
+  if (!store.streaming) return
+  // 如果用户滚动到底部附近，视为"跟随"，恢复自动滚动
+  if (isAtBottom()) {
+    userScrolled = false
+    return
+  }
+  // 用户向上滚动，暂停自动滚动
+  userScrolled = true
+  // 防抖：停止滚动 100ms 后才确认
+  if (scrollTimer) clearTimeout(scrollTimer)
+  scrollTimer = setTimeout(() => { scrollTimer = null }, 100)
+}
+
+// 新消息时强制滚到底（新对话/发送消息），同时重置 userScrolled
+watch(() => store.messages.length, () => {
+  userScrolled = false
+  scrollToBottom(true)
+})
+
+// 流式内容变化时，只有用户没有手动滚动才跟随
+watch(() => store.streamContent, () => scrollToBottom(false))
+
+// 流式结束时重置
+watch(() => store.streaming, (v) => {
+  if (!v) userScrolled = false
+})
+
+// 切换对话时强制滚到底
+watch(() => store.currentConvId, () => {
+  userScrolled = false
+  scrollToBottom(true)
+})
 </script>
 
 <template>
-  <div class="message-list" ref="listRef">
+  <div class="message-list" ref="listRef" @scroll.passive="onScroll">
     <div v-if="!store.messages.length && !store.streamContent" class="msg-hint">
       <p>发送一条消息开始对话</p>
     </div>
-    <template v-for="m in store.messages" :key="m.id">
+    <template v-for="(m, idx) in store.messages" :key="m.id">
       <MessageItem :msg="m" />
+      <!-- context cutoff divider: shown after the cutoff message -->
+      <div v-if="store.contextCutoffId && m.id === store.contextCutoffId" class="ctx-divider">
+        <span class="ctx-divider-line" />
+        <span class="ctx-divider-label">上下文从此处清除</span>
+        <span class="ctx-divider-line" />
+      </div>
     </template>
-    <div v-if="store.streamContent" class="streaming">
-      <MessageItem :msg="makeStreamMsg(store.streamContent)" />
+    <div v-if="store.streamContent || store.streaming" class="streaming">
+      <MessageItem
+        v-if="store.streamContent || store.streamThinking"
+        :msg="makeStreamMsg(store.streamContent)"
+        :streaming="true"
+        :thinking="store.streamThinking"
+      />
+      <div v-else-if="store.streaming" class="thinking">
+        <div class="thinking-dots">
+          <span /><span /><span />
+        </div>
+      </div>
     </div>
-    <div ref="sentinel" />
   </div>
 </template>
 
 <style scoped>
 .message-list {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: scroll; /* 强制常显滚动条轨道 */
   padding: var(--space-2) 0;
+}
+
+.message-list::-webkit-scrollbar {
+  width: 12px;
+}
+.message-list::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 8px 0;
+}
+.message-list::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 99px;
+  min-height: 40px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.message-list::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-3);
+  border-width: 1px;
+  background-clip: padding-box;
 }
 
 .msg-hint {
@@ -44,5 +131,50 @@ function makeStreamMsg(content: string) {
   font-size: var(--text-sm);
 }
 
-.streaming { opacity: 0.85; }
+.streaming { opacity: 1; }
+
+.ctx-divider {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-6);
+  user-select: none;
+}
+.ctx-divider-line {
+  flex: 1; height: 1px;
+  background: linear-gradient(90deg, transparent, oklch(0.65 0.15 25 / 0.4), transparent);
+}
+.ctx-divider-label {
+  font-size: 10px; font-weight: 500;
+  color: oklch(0.65 0.15 25 / 0.7);
+  white-space: nowrap; letter-spacing: 0.05em;
+}
+
+.thinking {
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+}
+
+.thinking-dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: calc(28px + var(--space-4));
+}
+
+.thinking-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-3);
+  animation: bounce 1.2s infinite ease-in-out;
+}
+
+.thinking-dots span:nth-child(1) { animation-delay: 0s; }
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-6px); opacity: 1; }
+}
 </style>

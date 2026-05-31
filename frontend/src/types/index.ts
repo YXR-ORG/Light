@@ -24,6 +24,7 @@ export interface Setting {
 
 export interface StreamChunk {
   content: string
+  thinking?: string
   done: boolean
   error?: string
 }
