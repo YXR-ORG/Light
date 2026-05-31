@@ -160,6 +160,19 @@ async function send() {
     }
   }
 
+  // 有图片附件时检查模型是否支持 vision
+  const hasImages = attachments.value.some(a => a.mime_type.startsWith('image/'))
+  if (hasImages) {
+    const model = currentModel.value || ''
+    const visionModels = ['gpt-4o', 'gpt-4-turbo', 'gpt-4-vision', 'claude-3', 'claude-3-5', 'gemini', 'qwen-vl', 'glm-4v']
+    const supported = visionModels.some(v => model.toLowerCase().includes(v))
+    if (!supported) {
+      store.resetStream()
+      store.appendStream(`⚠️ 当前模型 **${model}** 不支持图片识别，请切换到支持多模态的模型（如 gpt-4o、claude-3 等）后重试。`)
+      return
+    }
+  }
+
   input.value = ''
   showSkills.value = false
   showModelPicker.value = false
@@ -175,6 +188,9 @@ async function send() {
     content: text,
     tool_calls: '',
     tool_result: '',
+    attachments: sentAttachments.length > 0
+      ? JSON.stringify(sentAttachments.map(a => ({ name: a.name, mime_type: a.mime_type })))
+      : '',
     created_at: new Date().toISOString(),
   } as any)
 
@@ -302,7 +318,7 @@ function onKeydown(e: KeyboardEvent) {
     <div class="input-inner">
       <!-- 附件上传按钮：textarea 内左下角 -->
       <input ref="fileInputRef" type="file" multiple
-        accept="image/*,.pdf,.txt,.md,.csv,.json,.py,.js,.ts,.go,.java,.html,.css"
+        accept="image/*,.txt,.md,.csv,.json,.py,.js,.ts,.go,.java,.html,.css,.xml,.yaml,.yml,.sh,.sql"
         style="display:none" @change="handleFileSelect" />
       <button class="btn-attach-inner" @click="fileInputRef?.click()"
         :title="'上传文件或图片（最大 10MB）'"
