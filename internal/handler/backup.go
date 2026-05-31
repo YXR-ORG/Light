@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -177,5 +178,23 @@ func (h *BackupHandler) Restore(filename string) error {
 		_ = os.Rename(dbPath+".bak", dbPath)
 		return fmt.Errorf("写入失败: %w", err)
 	}
+	dest.Close()
+
+	// Relaunch the app and exit current process
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("恢复成功，但无法自动重启，请手动重启应用")
+	}
+	cmd := exec.Command(exe)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("恢复成功，但无法自动重启，请手动重启应用")
+	}
+	// Give the new process a moment to start, then exit
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
 	return nil
 }

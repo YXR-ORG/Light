@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useSettingsStore } from '../stores/settings'
 import MCPConfig from './MCPConfig.vue'
 import {
@@ -266,11 +266,15 @@ const pagedBackups = computed(() =>
 const showConfirm = ref(false)
 const confirmMsg = ref('')
 const confirmAction = ref<(() => void) | null>(null)
+const confirmRef = ref<HTMLElement | null>(null)
 
 function openConfirm(msg: string, action: () => void) {
   confirmMsg.value = msg
   confirmAction.value = action
   showConfirm.value = true
+  nextTick(() => {
+    confirmRef.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  })
 }
 function doConfirm() {
   showConfirm.value = false
@@ -327,15 +331,14 @@ async function loadBackups() {
 }
 
 async function doRestore(filename: string) {
-  openConfirm(`确认从 ${filename} 恢复？当前数据将被覆盖，恢复后需要重启应用。`, async () => {
+  openConfirm(`确认从 ${filename} 恢复数据？\n当前所有数据将被覆盖，恢复完成后应用将自动重启。`, async () => {
     webdavRestoring.value = filename
-    webdavBackupMsg.value = ''
+    webdavBackupMsg.value = '恢复中，完成后将自动重启...'
     try {
       await Restore(filename)
-      webdavBackupMsg.value = '✓ 恢复成功，请重启应用以加载新数据'
+      // 后端会自动重启，前端只需等待
     } catch (e: any) {
       webdavBackupMsg.value = '✗ 恢复失败: ' + (e?.message || String(e))
-    } finally {
       webdavRestoring.value = ''
     }
   })
@@ -488,7 +491,7 @@ function formatSize(bytes: number): string {
                 </div>
 
                 <!-- 内联确认弹窗 -->
-                <div v-if="showConfirm" class="inline-confirm">
+                <div v-if="showConfirm" class="inline-confirm" ref="confirmRef">
                   <div class="inline-confirm-msg">{{ confirmMsg }}</div>
                   <div class="inline-confirm-actions">
                     <button class="btn btn-sm btn-danger" @click="doConfirm">确认</button>
