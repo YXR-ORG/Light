@@ -19,6 +19,7 @@ type App struct {
 	providerHandler     *handler.ProviderHandler
 	agentHandler        *handler.AgentHandler
 	skillHandler        *handler.SkillHandler
+	backupHandler       *handler.BackupHandler
 	ctx                 context.Context
 }
 
@@ -32,6 +33,7 @@ func NewApp() *App {
 		providerHandler:     handler.NewProviderHandler(),
 		agentHandler:        handler.NewAgentHandler(),
 		skillHandler:        handler.NewSkillHandler(),
+		backupHandler:       handler.NewBackupHandler(),
 	}
 }
 

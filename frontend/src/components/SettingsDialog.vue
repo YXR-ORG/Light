@@ -9,6 +9,7 @@ import {
 import { ListAgents, SaveAgent, DeleteAgent } from '../../wailsjs/go/handler/AgentHandler'
 import { ListSkills, SaveSkill, ToggleSkill, DeleteSkill, ImportSkillZip } from '../../wailsjs/go/handler/SkillHandler'
 import { Get as GetSetting, Set as SetSetting } from '../../wailsjs/go/handler/SettingsHandler'
+import { SaveConfig, GetConfig, Backup, ListBackups, Restore } from '../../wailsjs/go/handler/BackupHandler'
 import AboutPanel from './AboutPanel.vue'
 import type { storage } from '../../wailsjs/go/models'
 
@@ -237,14 +238,68 @@ async function handleSkillZipUpload(e: Event) {
 const tavilyKey = ref('')
 const tavilyKeySaved = ref(false)
 
-onMounted(async () => {
-  tavilyKey.value = await GetSetting('tavily_api_key').catch(() => '')
-})
-
 async function saveTavilyKey() {
   await SetSetting('tavily_api_key', tavilyKey.value)
   tavilyKeySaved.value = true
   setTimeout(() => { tavilyKeySaved.value = false }, 2000)
+}
+
+// ── WebDAV 备份 ──
+const webdavURL = ref('')
+const webdavUsername = ref('')
+const webdavPassword = ref('')
+const webdavPath = ref('/Light/')
+const webdavConfigSaved = ref(false)
+const webdavBacking = ref(false)
+const webdavBackupMsg = ref('')
+const webdavBackups = ref<string[]>([])
+const webdavRestoring = ref('')
+
+onMounted(async () => {
+  tavilyKey.value = await GetSetting('tavily_api_key').catch(() => '')
+  const cfg = await GetConfig().catch(() => null)
+  if (cfg) {
+    webdavURL.value = cfg.url || ''
+    webdavUsername.value = cfg.username || ''
+    webdavPath.value = cfg.path || '/Light/'
+  }
+})
+
+async function saveWebDAVConfig() {
+  await SaveConfig(webdavURL.value, webdavUsername.value, webdavPassword.value, webdavPath.value)
+  webdavConfigSaved.value = true
+  setTimeout(() => { webdavConfigSaved.value = false }, 2000)
+}
+
+async function doBackup() {
+  webdavBacking.value = true
+  webdavBackupMsg.value = ''
+  try {
+    await Backup()
+    webdavBackupMsg.value = '✓ 备份成功'
+    await loadBackups()
+  } catch (e: any) {
+    webdavBackupMsg.value = '✗ ' + (e?.message || String(e))
+  } finally {
+    webdavBacking.value = false
+  }
+}
+
+async function loadBackups() {
+  webdavBackups.value = await ListBackups().catch(() => [])
+}
+
+async function doRestore(filename: string) {
+  if (!confirm(`确认从 ${filename} 恢复？当前数据将被覆盖，恢复后需要重启应用。`)) return
+  webdavRestoring.value = filename
+  try {
+    await Restore(filename)
+    alert('恢复成功，请重启应用以加载新数据。')
+  } catch (e: any) {
+    alert('恢复失败: ' + (e?.message || String(e)))
+  } finally {
+    webdavRestoring.value = ''
+  }
 }
 </script>
 
@@ -300,6 +355,51 @@ async function saveTavilyKey() {
                     <input v-model="tavilyKey" type="password" placeholder="tvly-..." autocomplete="off" style="flex:1" />
                     <button class="btn btn-primary" @click="saveTavilyKey" style="white-space:nowrap">
                       {{ tavilyKeySaved ? '已保存 ✓' : '保存' }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-section">
+                <div class="setting-section-title">数据备份（WebDAV）</div>
+                <div class="setting-section-desc">将本地数据库备份到 WebDAV 服务器（支持坚果云、Nextcloud 等）。</div>
+                <div class="form-fields" style="margin-top:var(--space-3)">
+                  <div class="field">
+                    <label>服务器地址</label>
+                    <input v-model="webdavURL" placeholder="https://dav.jianguoyun.com/dav/" />
+                  </div>
+                  <div class="field">
+                    <label>用户名</label>
+                    <input v-model="webdavUsername" placeholder="your@email.com" autocomplete="off" />
+                  </div>
+                  <div class="field">
+                    <label>密码 <span class="optional">留空则不修改</span></label>
+                    <input v-model="webdavPassword" type="password" placeholder="••••••••" autocomplete="new-password" />
+                  </div>
+                  <div class="field">
+                    <label>远程路径</label>
+                    <input v-model="webdavPath" placeholder="/Light/" />
+                  </div>
+                  <button class="btn btn-secondary" @click="saveWebDAVConfig">
+                    {{ webdavConfigSaved ? '已保存 ✓' : '保存配置' }}
+                  </button>
+                </div>
+
+                <div class="webdav-actions" style="margin-top:var(--space-4)">
+                  <button class="btn btn-primary" @click="doBackup" :disabled="webdavBacking">
+                    {{ webdavBacking ? '备份中...' : '立即备份' }}
+                  </button>
+                  <button class="btn btn-secondary" @click="loadBackups">查看备份列表</button>
+                  <span v-if="webdavBackupMsg" class="backup-msg" :class="{ error: webdavBackupMsg.startsWith('✗') }">
+                    {{ webdavBackupMsg }}
+                  </span>
+                </div>
+
+                <div v-if="webdavBackups.length > 0" class="backup-list">
+                  <div v-for="f in webdavBackups" :key="f" class="backup-item">
+                    <span class="backup-filename">{{ f }}</span>
+                    <button class="btn btn-sm btn-danger" @click="doRestore(f)" :disabled="webdavRestoring === f">
+                      {{ webdavRestoring === f ? '恢复中...' : '恢复' }}
                     </button>
                   </div>
                 </div>
@@ -670,6 +770,20 @@ async function saveTavilyKey() {
 .setting-section-desc { font-size: var(--text-xs); color: var(--color-text-3); line-height: 1.6; }
 .setting-link { font-size: var(--text-xs); color: var(--color-accent); text-decoration: none; margin-left: var(--space-2); }
 .setting-link:hover { text-decoration: underline; }
+
+.webdav-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.backup-msg { font-size: var(--text-xs); color: var(--color-success); }
+.backup-msg.error { color: var(--color-danger); }
+
+.backup-list { margin-top: var(--space-3); display: flex; flex-direction: column; gap: var(--space-1); }
+.backup-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-paper-2); border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+.backup-filename { font-size: var(--text-xs); color: var(--color-text-2); font-family: var(--font-mono); }
+.btn-sm { padding: 3px var(--space-2); font-size: var(--text-xs); }
 
 /* ── Skills 广场 ── */
 .skills-market { display: flex; flex-direction: column; gap: var(--space-3); height: 100%; overflow-y: auto; }

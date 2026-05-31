@@ -62,6 +62,22 @@ export namespace handler {
 		    return a;
 		}
 	}
+	export class WebDAVConfig {
+	    url: string;
+	    username: string;
+	    path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WebDAVConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.username = source["username"];
+	        this.path = source["path"];
+	    }
+	}
 
 }
 

@@ -38,6 +38,7 @@ func main() {
 			app.providerHandler,
 			app.agentHandler,
 			app.skillHandler,
+			app.backupHandler,
 		},
 	})
 

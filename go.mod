@@ -9,6 +9,7 @@ require (
 	github.com/cloudwego/eino-ext/components/tool/mcp v0.0.8
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.54.1
+	github.com/studio-b12/gowebdav v0.12.0
 	github.com/wailsapp/wails/v2 v2.12.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/sqlite v1.6.0
