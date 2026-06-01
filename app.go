@@ -20,6 +20,7 @@ type App struct {
 	agentHandler        *handler.AgentHandler
 	skillHandler        *handler.SkillHandler
 	backupHandler       *handler.BackupHandler
+	knowledgeHandler    *handler.KnowledgeHandler
 	ctx                 context.Context
 }
 
@@ -34,6 +35,7 @@ func NewApp() *App {
 		agentHandler:        handler.NewAgentHandler(),
 		skillHandler:        handler.NewSkillHandler(),
 		backupHandler:       handler.NewBackupHandler(),
+		knowledgeHandler:    handler.NewKnowledgeHandler(),
 	}
 }
 
@@ -44,6 +46,7 @@ func (a *App) GetVersion() string {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.chatHandler.SetContext(ctx)
+	a.knowledgeHandler.SetContext(ctx)
 	home, _ := os.UserHomeDir()
 	logDir := filepath.Join(home, ".wails-chat")
 	os.MkdirAll(logDir, 0755)

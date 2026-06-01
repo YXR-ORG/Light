@@ -44,6 +44,8 @@ export namespace handler {
 	    ignore_context: boolean;
 	    context_cutoff_id: string;
 	    attachments: Attachment[];
+	    mode: string;
+	    knowledge_base_id: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SendMessageRequest(source);
@@ -62,6 +64,8 @@ export namespace handler {
 	        this.ignore_context = source["ignore_context"];
 	        this.context_cutoff_id = source["context_cutoff_id"];
 	        this.attachments = this.convertValues(source["attachments"], Attachment);
+	        this.mode = source["mode"];
+	        this.knowledge_base_id = source["knowledge_base_id"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -96,6 +100,37 @@ export namespace handler {
 	        this.url = source["url"];
 	        this.username = source["username"];
 	        this.path = source["path"];
+	    }
+	}
+
+}
+
+export namespace kb {
+	
+	export class KBDocument {
+	    id: string;
+	    name: string;
+	    mime_type: string;
+	    size: number;
+	    chunk_count: number;
+	    status: string;
+	    error: string;
+	    created_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new KBDocument(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.mime_type = source["mime_type"];
+	        this.size = source["size"];
+	        this.chunk_count = source["chunk_count"];
+	        this.status = source["status"];
+	        this.error = source["error"];
+	        this.created_at = source["created_at"];
 	    }
 	}
 
@@ -153,6 +188,48 @@ export namespace storage {
 	        this.system_prompt = source["system_prompt"];
 	        this.agent_id = source["agent_id"];
 	        this.mcp_server_ids = source["mcp_server_ids"];
+	        this.created_at = this.convertValues(source["created_at"], null);
+	        this.updated_at = this.convertValues(source["updated_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class KnowledgeBase {
+	    id: string;
+	    name: string;
+	    description: string;
+	    doc_count: number;
+	    // Go type: time
+	    created_at: any;
+	    // Go type: time
+	    updated_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new KnowledgeBase(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.doc_count = source["doc_count"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	    }
@@ -260,6 +337,8 @@ export namespace storage {
 	    attachments?: string;
 	    agent_id: string;
 	    mcp_server_ids: string;
+	    mode: string;
+	    knowledge_base_id: string;
 	    // Go type: time
 	    created_at: any;
 	
@@ -279,6 +358,8 @@ export namespace storage {
 	        this.attachments = source["attachments"];
 	        this.agent_id = source["agent_id"];
 	        this.mcp_server_ids = source["mcp_server_ids"];
+	        this.mode = source["mode"];
+	        this.knowledge_base_id = source["knowledge_base_id"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	    }
 	

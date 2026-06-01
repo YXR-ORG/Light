@@ -60,6 +60,8 @@ type SendMessageRequest struct {
 	IgnoreContext   bool         `json:"ignore_context"`
 	ContextCutoffID string       `json:"context_cutoff_id"`
 	Attachments     []Attachment `json:"attachments"`
+	Mode            string       `json:"mode"`            // "chat" | "knowledge"
+	KnowledgeBaseID string       `json:"knowledge_base_id"` // kb_id，mode=knowledge 时有效
 }
 
 type SendMessageResponse struct {
@@ -83,6 +85,12 @@ func (h *ChatHandler) CancelStream() {
 }
 
 const maxAttachmentSize = 10 * 1024 * 1024 // 10MB
+
+// kbDirForChat 返回知识库目录（与 KnowledgeHandler 保持一致）
+func kbDirForChat(kbID string) string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".wails-chat", "knowledgebases", kbID)
+}
 
 // PickAttachments 弹出系统文件选择框，读取文件内容并返回附件列表（含 base64 data）。
 // 由后端完成文件读取，前端无需处理文件 IO 或 base64 编码。
@@ -114,10 +122,12 @@ func (h *ChatHandler) PickAttachments() ([]Attachment, error) {
 			slog.Warn("PickAttachments: file too large, skipped", "path", p, "size", len(data))
 			continue
 		}
-		mimeType := mime.TypeByExtension(filepath.Ext(p))
+		mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(p)))
 		if mimeType == "" {
 			mimeType = "application/octet-stream"
 		}
+		// 去掉参数（如 "text/plain; charset=utf-8" → "text/plain"）
+		mimeType = strings.SplitN(mimeType, ";", 2)[0]
 		attachments = append(attachments, Attachment{
 			Name:     filepath.Base(p),
 			MimeType: mimeType,
@@ -289,6 +299,15 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 			allTools = append(allTools, eino.NewSkillTool(skill.ID, skill.Name, skill.Description, skill.Content))
 		}
 	}
+	// 知识库模式：绑定 search_knowledge tool
+	if req.Mode == "knowledge" && req.KnowledgeBaseID != "" {
+		kbPath := kbDirForChat(req.KnowledgeBaseID)
+		if kbTool, err := eino.NewKnowledgeSearchTool(req.KnowledgeBaseID, kbPath); err != nil {
+			slog.Warn("KnowledgeSearchTool init failed", "kb", req.KnowledgeBaseID, "error", err)
+		} else {
+			allTools = append(allTools, kbTool)
+		}
+	}
 	slog.Info("BindTools", "count", len(allTools), "web_search", req.WebSearch)
 	if len(allTools) > 0 {
 		if err := h.chat.BindTools(ctx, allTools); err != nil {
@@ -344,6 +363,9 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 	if req.WebSearch {
 		systemContent += "\nYou have access to a web_search tool. Use it to find current information. After 1-2 searches, synthesize the results and provide a final answer."
 	}
+	if req.Mode == "knowledge" && req.KnowledgeBaseID != "" {
+		systemContent += "\nYou have access to a search_knowledge tool. When answering questions that require document knowledge, you MUST call search_knowledge first. Always cite your sources."
+	}
 	einoMsgs = append(einoMsgs, &schema.Message{
 		Role:    schema.System,
 		Content: systemContent,
@@ -371,10 +393,7 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 			if i == len(history)-1 && m.Role == "user" {
 				einoMsgs = append(einoMsgs, buildUserMessage(m.Content, req.Attachments))
 			} else {
-				einoMsgs = append(einoMsgs, &schema.Message{
-					Role:    storage.ToEinoRole(m.Role),
-					Content: m.Content,
-				})
+				einoMsgs = append(einoMsgs, historyToEinoMsg(m))
 			}
 		}
 	}
@@ -444,9 +463,18 @@ func buildUserMessage(content string, attachments []Attachment) *schema.Message 
 		})
 	}
 	for _, a := range attachments {
-		if strings.HasPrefix(a.MimeType, "image/") {
+		slog.Debug("buildUserMessage attachment",
+			"name", a.Name,
+			"mime_type", a.MimeType,
+			"data_len", len(a.Data),
+		)
+		// 统一小写 mime type，去掉参数（如 "; charset=utf-8"）
+		mimeType := strings.ToLower(strings.SplitN(a.MimeType, ";", 2)[0])
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		if strings.HasPrefix(mimeType, "image/") {
 			b64 := a.Data
-			mimeType := a.MimeType
 			parts = append(parts, schema.MessageInputPart{
 				Type: schema.ChatMessagePartTypeImageURL,
 				Image: &schema.MessageInputImage{
@@ -458,7 +486,14 @@ func buildUserMessage(content string, attachments []Attachment) *schema.Message 
 			})
 		} else {
 			decoded, err := base64.StdEncoding.DecodeString(a.Data)
-			if err == nil {
+			if err != nil {
+				slog.Warn("buildUserMessage: base64 decode failed", "name", a.Name, "error", err)
+				// 降级：直接把 data 当文本（可能是纯文本文件直接传来的）
+				parts = append(parts, schema.MessageInputPart{
+					Type: schema.ChatMessagePartTypeText,
+					Text: fmt.Sprintf("\n\n[文件: %s]\n%s", a.Name, a.Data),
+				})
+			} else {
 				parts = append(parts, schema.MessageInputPart{
 					Type: schema.ChatMessagePartTypeText,
 					Text: fmt.Sprintf("\n\n[文件: %s]\n%s", a.Name, string(decoded)),
@@ -467,6 +502,34 @@ func buildUserMessage(content string, attachments []Attachment) *schema.Message 
 		}
 	}
 	return &schema.Message{Role: schema.User, UserInputMultiContent: parts}
+}
+
+// historyToEinoMsg 将数据库历史消息还原为 eino Message，保留 tool call 信息。
+func historyToEinoMsg(m storage.Message) *schema.Message {
+	msg := &schema.Message{
+		Role:    storage.ToEinoRole(m.Role),
+		Content: m.Content,
+	}
+	// 还原 assistant 的 tool_calls
+	if m.ToolCalls != "" {
+		var tc []schema.ToolCall
+		if err := json.Unmarshal([]byte(m.ToolCalls), &tc); err == nil {
+			msg.ToolCalls = tc
+		}
+	}
+	// 还原 tool 消息的 tool_call_id 和 tool_name
+	if m.Role == "tool" && m.ToolResult != "" {
+		// ToolResult 格式: {"tool_call_id":"...","tool_name":"...","content":"..."}
+		var tr struct {
+			ToolCallID string `json:"tool_call_id"`
+			ToolName   string `json:"tool_name"`
+		}
+		if err := json.Unmarshal([]byte(m.ToolResult), &tr); err == nil {
+			msg.ToolCallID = tr.ToolCallID
+			msg.ToolName = tr.ToolName
+		}
+	}
+	return msg
 }
 
 func (h *ChatHandler) runToolLoop(ctx context.Context, messages []*schema.Message) (string, string) {	fullContent := ""

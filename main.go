@@ -39,6 +39,7 @@ func main() {
 			app.agentHandler,
 			app.skillHandler,
 			app.backupHandler,
+			app.knowledgeHandler,
 		},
 	})
 
