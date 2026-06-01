@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useSettingsStore } from '../stores/settings'
 import MCPConfig from './MCPConfig.vue'
+import KnowledgeConfig from './KnowledgeConfig.vue'
 import {
   ListProviders, SaveProvider, DeleteProvider, ToggleProvider,
   ListModels, AddModel, DeleteModel,
@@ -16,7 +17,7 @@ import type { storage, handler } from '../../wailsjs/go/models'
 
 const settingsStore = useSettingsStore()
 
-type MainTab = 'providers' | 'agents' | 'skills' | 'mcp' | 'general' | 'about'
+type MainTab = 'providers' | 'agents' | 'skills' | 'mcp' | 'knowledge' | 'general' | 'about'
 const mainTab = ref<MainTab>('providers')
 
 const PROVIDER_TYPES = [
@@ -426,6 +427,10 @@ function formatSize(bytes: number): string {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
               MCP
             </button>
+            <button class="nav-item" :class="{ active: mainTab === 'knowledge' }" @click="mainTab = 'knowledge'">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+              知识库
+            </button>
             <button class="nav-item" :class="{ active: mainTab === 'about' }" @click="mainTab = 'about'">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
               关于
@@ -823,6 +828,9 @@ function formatSize(bytes: number): string {
             <div v-else-if="mainTab === 'mcp'" class="mcp-panel">
               <MCPConfig />
             </div>
+            <div v-else-if="mainTab === 'knowledge'" class="knowledge-panel">
+              <KnowledgeConfig />
+            </div>
 
             <!-- 关于 -->
             <AboutPanel v-else-if="mainTab === 'about'" />
@@ -949,6 +957,7 @@ function formatSize(bytes: number): string {
 .btn-primary:hover:not(:disabled) { background: var(--color-accent-2); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .mcp-panel { height: 100%; }
+.knowledge-panel { height: 100%; overflow-y: auto; }
 
 /* ── 通用设置 ── */
 .general-panel { display: flex; flex-direction: column; gap: var(--space-5); overflow-y: auto; }

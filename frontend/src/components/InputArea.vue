@@ -7,6 +7,7 @@ import { SetModel } from '../../wailsjs/go/handler/ConversationHandler'
 import { ListEnabledModels, ListProviders } from '../../wailsjs/go/handler/ProviderHandler'
 import { ListSkills } from '../../wailsjs/go/handler/SkillHandler'
 import { List as ListMCPServers } from '../../wailsjs/go/handler/MCPHandler'
+import { ListKnowledgeBases } from '../../wailsjs/go/handler/KnowledgeHandler'
 import { handler as handlerModels, type storage } from '../../wailsjs/go/models'
 
 const store = useChatStore()
@@ -18,6 +19,51 @@ const selectedSkillIDs = ref<string[]>([])
 const selectedMCPIDs = ref<string[]>([])
 const webSearch = ref(false)
 const ignoreContext = computed(() => store.contextCutoffId !== null)
+
+// 对话模式
+type ChatMode = 'chat' | 'knowledge'
+const chatMode = ref<ChatMode>('chat')
+const showModePicker = ref(false)
+const availableKBs = ref<storage.KnowledgeBase[]>([])
+const selectedKBID = ref('')
+const showKBPicker = ref(false)
+
+async function loadKBs() {
+  availableKBs.value = await ListKnowledgeBases().catch(() => [])
+}
+
+function toggleModePicker() {
+  showModePicker.value = !showModePicker.value
+  showKBPicker.value = false
+  showModelPicker.value = false
+  showSkillPicker.value = false
+  showMCPPicker.value = false
+}
+
+function selectMode(mode: ChatMode) {
+  chatMode.value = mode
+  showModePicker.value = false
+  if (mode === 'knowledge') {
+    loadKBs()
+    if (!selectedKBID.value && availableKBs.value.length > 0) {
+      selectedKBID.value = availableKBs.value[0].id
+    }
+  }
+}
+
+function toggleKBPicker() {
+  showKBPicker.value = !showKBPicker.value
+  showModePicker.value = false
+  showModelPicker.value = false
+  showSkillPicker.value = false
+  showMCPPicker.value = false
+  if (showKBPicker.value) loadKBs()
+}
+
+const selectedKBName = computed(() => {
+  const kb = availableKBs.value.find(k => k.id === selectedKBID.value)
+  return kb?.name ?? '选择知识库'
+})
 
 interface Attachment { name: string; mime_type: string; data: string }
 const attachments = ref<Attachment[]>([])
@@ -145,25 +191,34 @@ function onClickOutside(e: MouseEvent) {
     showModelPicker.value = false
     showSkillPicker.value = false
     showMCPPicker.value = false
+    showModePicker.value = false
+    showKBPicker.value = false
     return
   }
-  // 点击 input-area 内部但在 skill-picker 外部时关闭 skill-picker
   const skillPicker = document.querySelector('.skill-picker')
   const skillBtn = document.querySelector('.btn-skill-picker')
   if (showSkillPicker.value && skillPicker && !skillPicker.contains(e.target as Node) && !skillBtn?.contains(e.target as Node)) {
     showSkillPicker.value = false
   }
-  // 同理 model-picker
   const modelPicker = document.querySelector('.model-picker')
   const modelBtn = document.querySelector('.btn-model')
   if (showModelPicker.value && modelPicker && !modelPicker.contains(e.target as Node) && !modelBtn?.contains(e.target as Node)) {
     showModelPicker.value = false
   }
-  // MCP picker
   const mcpPicker = document.querySelector('.mcp-picker')
   const mcpBtn = document.querySelector('.btn-mcp-picker')
   if (showMCPPicker.value && mcpPicker && !mcpPicker.contains(e.target as Node) && !mcpBtn?.contains(e.target as Node)) {
     showMCPPicker.value = false
+  }
+  const modePicker = document.querySelector('.mode-picker')
+  const modeBtn = document.querySelector('.btn-mode')
+  if (showModePicker.value && modePicker && !modePicker.contains(e.target as Node) && !modeBtn?.contains(e.target as Node)) {
+    showModePicker.value = false
+  }
+  const kbPicker = document.querySelector('.kb-picker')
+  const kbBtn = document.querySelector('.btn-kb')
+  if (showKBPicker.value && kbPicker && !kbPicker.contains(e.target as Node) && !kbBtn?.contains(e.target as Node)) {
+    showKBPicker.value = false
   }
 }
 
@@ -240,6 +295,8 @@ async function send() {
       ignore_context: false,
       context_cutoff_id: store.contextCutoffId ?? '',
       attachments: sentAttachments,
+      mode: chatMode.value,
+      knowledge_base_id: chatMode.value === 'knowledge' ? selectedKBID.value : '',
     }))
   } catch (e: any) {
     const raw = typeof e === 'object' ? JSON.stringify(e) : String(e)
@@ -370,6 +427,59 @@ function onKeydown(e: KeyboardEvent) {
     <!-- 顶部状态行 -->
     <div class="input-meta" v-if="activeSkillLabel || true">
       <span v-if="activeSkillLabel" class="skill-badge">{{ activeSkillLabel }}</span>
+    </div>
+
+    <!-- 模式选择器 + 知识库选择器 -->
+    <div class="input-mode-bar">
+      <!-- 模式选择器 -->
+      <div class="mode-selector-wrap">
+        <button class="btn-mode" :class="{ 'btn-mode--active': showModePicker || chatMode !== 'chat' }" @click="toggleModePicker">
+          <span v-if="chatMode === 'chat'">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            问答
+          </span>
+          <span v-else-if="chatMode === 'knowledge'">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            知识
+          </span>
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <!-- 模式下拉 -->
+        <div v-if="showModePicker" class="mode-picker">
+          <button class="mode-option" :class="{ active: chatMode === 'chat' }" @click="selectMode('chat')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <div><div class="mode-name">问答</div><div class="mode-desc">默认对话模式</div></div>
+          </button>
+          <button class="mode-option" :class="{ active: chatMode === 'knowledge' }" @click="selectMode('knowledge')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <div><div class="mode-name">知识</div><div class="mode-desc">挂载知识库问答</div></div>
+          </button>
+          <button class="mode-option mode-option--disabled" disabled>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            <div><div class="mode-name">任务 <span class="mode-soon">即将推出</span></div><div class="mode-desc">自主 Agent 模式</div></div>
+          </button>
+        </div>
+      </div>
+
+      <!-- 知识库选择器（仅 knowledge 模式显示） -->
+      <div v-if="chatMode === 'knowledge'" class="kb-selector-wrap">
+        <button class="btn-kb" :class="{ 'btn-kb--active': showKBPicker }" @click="toggleKBPicker">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          <span>{{ selectedKBName }}</span>
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div v-if="showKBPicker" class="kb-picker">
+          <div v-if="availableKBs.length === 0" class="kb-picker-empty">
+            还没有知识库，请先在设置中创建
+          </div>
+          <button v-for="kb in availableKBs" :key="kb.id"
+            class="kb-picker-item" :class="{ active: selectedKBID === kb.id }"
+            @click="selectedKBID = kb.id; showKBPicker = false">
+            <span class="kb-picker-name">{{ kb.name }}</span>
+            <span class="kb-picker-count">{{ kb.doc_count }} 文档</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <div class="input-inner">
@@ -823,4 +933,32 @@ textarea::placeholder { color: var(--color-text-3); }
   flex-shrink: 0;
 }
 .btn-stop:hover { background: var(--color-danger); color: #fff; }
+
+/* 模式选择器 */
+.input-mode-bar { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) var(--space-1); }
+.mode-selector-wrap { position: relative; }
+.btn-mode { display: flex; align-items: center; gap: 4px; padding: 3px var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-full); background: transparent; color: var(--color-text-2); font-size: 11px; font-family: inherit; cursor: pointer; transition: all var(--duration-fast); white-space: nowrap; }
+.btn-mode span { display: flex; align-items: center; gap: 3px; }
+.btn-mode:hover, .btn-mode--active { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-soft); }
+.mode-picker { position: absolute; bottom: calc(100% + 6px); left: 0; background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 4px 16px rgba(0,0,0,.1); min-width: 180px; z-index: 100; overflow: hidden; }
+.mode-option { display: flex; align-items: flex-start; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--text-sm); font-family: inherit; cursor: pointer; text-align: left; }
+.mode-option:hover:not(:disabled) { background: var(--color-paper-2); }
+.mode-option.active { color: var(--color-accent); }
+.mode-option--disabled { opacity: 0.45; cursor: not-allowed; }
+.mode-name { font-weight: 500; font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.mode-desc { font-size: 11px; color: var(--color-text-3); margin-top: 1px; }
+.mode-soon { font-size: 10px; background: var(--color-paper-3); color: var(--color-text-3); padding: 1px 5px; border-radius: var(--radius-full); }
+
+/* 知识库选择器 */
+.kb-selector-wrap { position: relative; }
+.btn-kb { display: flex; align-items: center; gap: 4px; padding: 3px var(--space-2); border: 1px solid var(--color-accent); border-radius: var(--radius-full); background: var(--color-accent-soft); color: var(--color-accent); font-size: 11px; font-family: inherit; cursor: pointer; max-width: 160px; }
+.btn-kb span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn-kb:hover, .btn-kb--active { background: var(--color-accent); color: #fff; }
+.kb-picker { position: absolute; bottom: calc(100% + 6px); left: 0; background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 4px 16px rgba(0,0,0,.1); min-width: 200px; max-height: 240px; overflow-y: auto; z-index: 100; }
+.kb-picker-empty { padding: var(--space-3) var(--space-4); font-size: var(--text-xs); color: var(--color-text-3); }
+.kb-picker-item { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--text-sm); font-family: inherit; cursor: pointer; text-align: left; }
+.kb-picker-item:hover { background: var(--color-paper-2); }
+.kb-picker-item.active { color: var(--color-accent); background: var(--color-accent-soft); }
+.kb-picker-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-picker-count { font-size: 11px; color: var(--color-text-3); flex-shrink: 0; margin-left: var(--space-2); }
 </style>
