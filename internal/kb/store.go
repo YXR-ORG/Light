@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -70,8 +71,17 @@ func CloseStore(kbID string) {
 }
 
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(`
-CREATE TABLE IF NOT EXISTS documents (
+	// 检测旧版 FTS5 schema（content= 外部表模式），如有则删除重建
+	var ftsSQL string
+	s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_fts'`).Scan(&ftsSQL)
+	needRebuildFTS := false
+	if ftsSQL != "" && strings.Contains(ftsSQL, "content=") {
+		slog.Info("migrate: detected old FTS5 schema, dropping for rebuild")
+		s.db.Exec(`DROP TABLE IF EXISTS chunks_fts`)
+		needRebuildFTS = true
+	}
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS documents (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL,
   mime_type   TEXT NOT NULL,
@@ -80,30 +90,70 @@ CREATE TABLE IF NOT EXISTS documents (
   status      TEXT DEFAULT 'pending',
   error       TEXT DEFAULT '',
   created_at  DATETIME
-);
-
-CREATE TABLE IF NOT EXISTS chunks (
+)`,
+		`CREATE TABLE IF NOT EXISTS chunks (
   id          TEXT PRIMARY KEY,
   doc_id      TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   content     TEXT NOT NULL,
   chunk_index INTEGER NOT NULL,
   created_at  DATETIME
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+)`,
+		// FTS5 独立存储模式（不用 content= 外部表，避免事务同步问题）
+		`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  doc_name UNINDEXED,
+  chunk_index UNINDEXED,
   content,
-  content='chunks',
-  content_rowid='rowid',
   tokenize='unicode61'
-);
-
-CREATE TABLE IF NOT EXISTS vectors (
+)`,
+		`CREATE TABLE IF NOT EXISTS vectors (
   id       TEXT PRIMARY KEY,
   chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
   embedding BLOB
-);
-`)
-	return err
+)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate: %w (sql: %.60s)", err, stmt)
+		}
+	}
+	if needRebuildFTS {
+		if err := s.rebuildFTSFromChunks(); err != nil {
+			slog.Warn("migrate: rebuildFTS failed", "error", err)
+		}
+	}
+	return nil
+}
+
+// rebuildFTSFromChunks 从 chunks 表重新填充 FTS5 索引（用于 schema 迁移后）
+func (s *Store) rebuildFTSFromChunks() error {
+	rows, err := s.db.Query(`
+SELECT c.id, c.content, c.chunk_index, d.name
+FROM chunks c JOIN documents d ON c.doc_id = d.id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for rows.Next() {
+		var chunkID, content, docName string
+		var chunkIndex int
+		if err := rows.Scan(&chunkID, &content, &chunkIndex, &docName); err != nil {
+			continue
+		}
+		tx.Exec(`INSERT INTO chunks_fts(chunk_id, doc_name, chunk_index, content) VALUES(?,?,?,?)`,
+			chunkID, docName, chunkIndex, content)
+	}
+	count := 0
+	s.db.QueryRow(`SELECT count(*) FROM chunks`).Scan(&count)
+	slog.Info("rebuildFTS: done", "chunks", count)
+	return tx.Commit()
 }
 
 // newID 生成简单 UUID（复用 storage 包逻辑，避免循环依赖）
@@ -130,10 +180,14 @@ func (s *Store) UpdateDocumentStatus(docID, status, errMsg string, chunkCount in
 	return err
 }
 
-// InsertChunks 批量写入分块并重建 FTS5 索引
+// InsertChunks 批量写入分块并同步到 FTS5 索引
 func (s *Store) InsertChunks(docID string, chunks []Chunk) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// 查询文档名（用于 FTS5 存储，方便检索结果展示）
+	var docName string
+	s.db.QueryRow(`SELECT name FROM documents WHERE id=?`, docID).Scan(&docName)
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -143,22 +197,25 @@ func (s *Store) InsertChunks(docID string, chunks []Chunk) error {
 
 	now := time.Now().Format(time.RFC3339)
 	for _, c := range chunks {
-		id := fmt.Sprintf("%s_%d", docID, c.ChunkIndex)
+		chunkID := fmt.Sprintf("%s_%d", docID, c.ChunkIndex)
 		if _, err := tx.Exec(
 			`INSERT INTO chunks(id,doc_id,content,chunk_index,created_at) VALUES(?,?,?,?,?)`,
-			id, docID, c.Content, c.ChunkIndex, now,
+			chunkID, docID, c.Content, c.ChunkIndex, now,
 		); err != nil {
 			return err
 		}
-	}
-	// 重建 FTS5 索引
-	if _, err := tx.Exec(`INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')`); err != nil {
-		slog.Warn("kbstore: fts5 rebuild failed", "error", err)
+		// 同步写入 FTS5（独立存储，不依赖 content= 外部表）
+		if _, err := tx.Exec(
+			`INSERT INTO chunks_fts(chunk_id, doc_name, chunk_index, content) VALUES(?,?,?,?)`,
+			chunkID, docName, c.ChunkIndex, c.Content,
+		); err != nil {
+			return fmt.Errorf("fts5 insert failed: %w", err)
+		}
 	}
 	return tx.Commit()
 }
 
-// DeleteDocumentChunks 删除文档的所有分块（级联删除 FTS5 由触发器处理，这里手动重建）
+// DeleteDocumentChunks 删除文档的所有分块及 FTS5 记录
 func (s *Store) DeleteDocumentChunks(docID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -169,14 +226,27 @@ func (s *Store) DeleteDocumentChunks(docID string) error {
 	}
 	defer tx.Rollback()
 
+	// 先查出所有 chunk_id，用于删除 FTS5
+	rows, err := tx.Query(`SELECT id FROM chunks WHERE doc_id=?`, docID)
+	if err != nil {
+		return err
+	}
+	var chunkIDs []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		chunkIDs = append(chunkIDs, id)
+	}
+	rows.Close()
+
+	for _, cid := range chunkIDs {
+		tx.Exec(`DELETE FROM chunks_fts WHERE chunk_id=?`, cid)
+	}
 	if _, err := tx.Exec(`DELETE FROM chunks WHERE doc_id=?`, docID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM documents WHERE id=?`, docID); err != nil {
 		return err
-	}
-	if _, err := tx.Exec(`INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')`); err != nil {
-		slog.Warn("kbstore: fts5 rebuild failed after delete", "error", err)
 	}
 	return tx.Commit()
 }
@@ -187,14 +257,13 @@ func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 		topK = 5
 	}
 	rows, err := s.db.Query(`
-SELECT c.content, c.chunk_index, d.name
+SELECT content, chunk_index, doc_name
 FROM chunks_fts
-JOIN chunks c ON chunks_fts.rowid = c.rowid
-JOIN documents d ON c.doc_id = d.id
 WHERE chunks_fts MATCH ?
 ORDER BY rank
 LIMIT ?`, query, topK)
 	if err != nil {
+		slog.Warn("kbstore: fts5 search failed", "query", query, "error", err)
 		return nil, fmt.Errorf("fts5 search failed: %w", err)
 	}
 	defer rows.Close()
@@ -207,6 +276,7 @@ LIMIT ?`, query, topK)
 		}
 		results = append(results, r)
 	}
+	slog.Info("kbstore: search", "query", query, "results", len(results))
 	return results, rows.Err()
 }
 

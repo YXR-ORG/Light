@@ -429,123 +429,89 @@ function onKeydown(e: KeyboardEvent) {
       <span v-if="activeSkillLabel" class="skill-badge">{{ activeSkillLabel }}</span>
     </div>
 
-    <!-- 模式选择器 + 知识库选择器 -->
-    <div class="input-mode-bar">
-      <!-- 模式选择器 -->
-      <div class="mode-selector-wrap">
-        <button class="btn-mode" :class="{ 'btn-mode--active': showModePicker || chatMode !== 'chat' }" @click="toggleModePicker">
-          <span v-if="chatMode === 'chat'">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            问答
-          </span>
-          <span v-else-if="chatMode === 'knowledge'">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-            知识
-          </span>
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-        </button>
-        <!-- 模式下拉 -->
-        <div v-if="showModePicker" class="mode-picker">
-          <button class="mode-option" :class="{ active: chatMode === 'chat' }" @click="selectMode('chat')">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            <div><div class="mode-name">问答</div><div class="mode-desc">默认对话模式</div></div>
-          </button>
-          <button class="mode-option" :class="{ active: chatMode === 'knowledge' }" @click="selectMode('knowledge')">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-            <div><div class="mode-name">知识</div><div class="mode-desc">挂载知识库问答</div></div>
-          </button>
-          <button class="mode-option mode-option--disabled" disabled>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            <div><div class="mode-name">任务 <span class="mode-soon">即将推出</span></div><div class="mode-desc">自主 Agent 模式</div></div>
-          </button>
-        </div>
-      </div>
-
-      <!-- 知识库选择器（仅 knowledge 模式显示） -->
-      <div v-if="chatMode === 'knowledge'" class="kb-selector-wrap">
-        <button class="btn-kb" :class="{ 'btn-kb--active': showKBPicker }" @click="toggleKBPicker">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-          <span>{{ selectedKBName }}</span>
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-        </button>
-        <div v-if="showKBPicker" class="kb-picker">
-          <div v-if="availableKBs.length === 0" class="kb-picker-empty">
-            还没有知识库，请先在设置中创建
-          </div>
-          <button v-for="kb in availableKBs" :key="kb.id"
-            class="kb-picker-item" :class="{ active: selectedKBID === kb.id }"
-            @click="selectedKBID = kb.id; showKBPicker = false">
-            <span class="kb-picker-name">{{ kb.name }}</span>
-            <span class="kb-picker-count">{{ kb.doc_count }} 文档</span>
-          </button>
-        </div>
-      </div>
-    </div>
-
     <div class="input-inner">
-      <!-- 附件上传按钮：textarea 内左下角 -->
-      <button class="btn-attach-inner" @click="pickAttachments()"
-        :title="'上传文件或图片（最大 10MB）'"
-        :class="{ active: attachments.length > 0 }">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-          <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-        </svg>
-      </button>
       <textarea
         v-model="input"
         placeholder="输入消息..."
         :disabled="store.streaming"
         @keydown="onKeydown"
-        @focus="showModelPicker = false"
+        @focus="showModelPicker = false; showModePicker = false; showKBPicker = false"
         rows="1"
-        class="has-attach-btn"
       />
       <div class="input-actions">
-        <!-- 忽略上下文按钮 -->
-        <button
-          class="btn-ignore-ctx"
-          :class="{ active: ignoreContext }"
-          @click="store.toggleContextCutoff()"
-          :title="ignoreContext ? '取消清除上下文' : '清除上下文（从此处开始新话题）'"
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <path d="M3 12h18M3 6h18M3 18h18"/>
-            <line x1="18" y1="3" x2="6" y2="21" stroke-width="1.5"/>
-          </svg>
+        <!-- 模式选择器 -->
+        <div class="mode-selector-wrap">
+          <button class="btn-mode" :class="{ 'btn-mode--active': showModePicker || chatMode !== 'chat' }" @click="toggleModePicker" title="切换对话模式">
+            <span v-if="chatMode === 'chat'">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              问答
+            </span>
+            <span v-else-if="chatMode === 'knowledge'">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+              知识
+            </span>
+            <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div v-if="showModePicker" class="mode-picker">
+            <button class="mode-option" :class="{ active: chatMode === 'chat' }" @click="selectMode('chat')">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <div><div class="mode-name">问答</div><div class="mode-desc">默认对话模式</div></div>
+            </button>
+            <button class="mode-option" :class="{ active: chatMode === 'knowledge' }" @click="selectMode('knowledge')">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+              <div><div class="mode-name">知识</div><div class="mode-desc">挂载知识库问答</div></div>
+            </button>
+            <button class="mode-option mode-option--disabled" disabled>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              <div><div class="mode-name">任务 <span class="mode-soon">即将推出</span></div><div class="mode-desc">自主 Agent 模式</div></div>
+            </button>
+          </div>
+        </div>
+        <!-- 知识库选择器（仅 knowledge 模式） -->
+        <div v-if="chatMode === 'knowledge'" class="kb-selector-wrap">
+          <button class="btn-kb" :class="{ 'btn-kb--active': showKBPicker }" @click="toggleKBPicker">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <span>{{ selectedKBName }}</span>
+            <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div v-if="showKBPicker" class="kb-picker">
+            <div v-if="availableKBs.length === 0" class="kb-picker-empty">还没有知识库，请先在设置中创建</div>
+            <button v-for="kb in availableKBs" :key="kb.id"
+              class="kb-picker-item" :class="{ active: selectedKBID === kb.id }"
+              @click="selectedKBID = kb.id; showKBPicker = false">
+              <span class="kb-picker-name">{{ kb.name }}</span>
+              <span class="kb-picker-count">{{ kb.doc_count }} 文档</span>
+            </button>
+          </div>
+        </div>
+        <!-- 分隔线 -->
+        <div class="actions-sep"></div>
+        <!-- 附件按钮 -->
+        <button class="btn-tool" @click="pickAttachments()" :title="'上传文件或图片'" :class="{ active: attachments.length > 0 }">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
-        <!-- 联网搜索按钮 -->
-        <button
-          class="btn-web-search"
-          :class="{ active: webSearch }"
-          @click="webSearch = !webSearch"
-          :title="webSearch ? '关闭联网搜索' : '开启联网搜索'"
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="2" y1="12" x2="22" y2="12"/>
-            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-          </svg>
+        <!-- 忽略上下文 -->
+        <button class="btn-tool" :class="{ active: ignoreContext }" @click="store.toggleContextCutoff()" :title="ignoreContext ? '取消清除上下文' : '清除上下文'">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/><line x1="18" y1="3" x2="6" y2="21" stroke-width="1.5"/></svg>
         </button>
-        <!-- Skills 选择按钮 -->
-        <button class="btn-skill-picker" :class="{ active: showSkillPicker || selectedSkillIDs.length > 0 }" @click="toggleSkillPicker" title="选择技能">
+        <!-- 联网搜索 -->
+        <button class="btn-tool" :class="{ active: webSearch }" @click="webSearch = !webSearch" :title="webSearch ? '关闭联网搜索' : '开启联网搜索'">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        </button>
+        <!-- Skills -->
+        <button class="btn-tool" :class="{ active: showSkillPicker || selectedSkillIDs.length > 0 }" @click="toggleSkillPicker" title="选择技能">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
           <span v-if="selectedSkillIDs.length > 0" class="skill-count">{{ selectedSkillIDs.length }}</span>
         </button>
-        <!-- MCP 选择按钮 -->
-        <button class="btn-mcp-picker" :class="{ active: showMCPPicker || selectedMCPIDs.length > 0 }" @click="toggleMCPPicker" title="选择 MCP 工具">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-            <path d="M2 17l10 5 10-5"/>
-            <path d="M2 12l10 5 10-5"/>
-          </svg>
+        <!-- MCP -->
+        <button class="btn-tool btn-mcp-picker" :class="{ active: showMCPPicker || selectedMCPIDs.length > 0 }" @click="toggleMCPPicker" title="选择 MCP 工具">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
           <span v-if="selectedMCPIDs.length > 0" class="mcp-count">{{ selectedMCPIDs.length }}</span>
         </button>
-        <!-- 模型选择按钮 -->
+        <!-- 模型选择 -->
         <button class="btn-model" :class="{ 'btn-model--active': showModelPicker }" @click="toggleModelPicker" title="切换模型">
           <span>{{ modelLabel }}</span>
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         <!-- 停止/发送 -->
         <button v-if="store.streaming" class="btn-stop" @click="stop" title="停止">
@@ -832,16 +798,62 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .input-inner {
-  position: relative;
   display: flex;
-  align-items: flex-end;
-  gap: var(--space-2);
+  flex-direction: column;
   background: var(--color-paper-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-2);
   transition: border-color var(--duration-fast) var(--ease-out);
 }
+.input-inner:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+textarea {
+  width: 100%;
+  border: none;
+  background: transparent;
+  resize: none;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text);
+  outline: none;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+textarea::placeholder { color: var(--color-text-3); }
+
+.input-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--color-border);
+  margin-top: var(--space-1);
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.actions-sep {
+  flex: 1;
+  min-width: var(--space-1);
+}
+
+/* 通用工具按钮 */
+.btn-tool {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex-shrink: 0;
+  border: none; border-radius: var(--radius-md); cursor: pointer;
+  background: transparent; color: var(--color-text-3);
+  transition: background var(--duration-fast), color var(--duration-fast);
+  position: relative;
+}
+.btn-tool:hover { background: var(--color-paper-3); color: var(--color-text-2); }
+.btn-tool.active { color: var(--color-accent); background: var(--color-accent-soft); }
 
 .input-inner:focus-within {
   border-color: var(--color-accent);
@@ -863,31 +875,11 @@ textarea {
 }
 
 textarea.has-attach-btn {
-  padding-left: 32px;
+  padding-left: 0;
 }
-.input-inner:focus-within {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
-}
-
-textarea {
-  flex: 1;
-  border: none; resize: none;
-  padding: var(--space-2) var(--space-3);
-  font-family: var(--font-body);
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-  color: var(--color-text);
-  background: transparent;
-  outline: none;
-  max-height: 200px;
-}
-textarea::placeholder { color: var(--color-text-3); }
-
-.input-actions { display: flex; align-items: center; gap: var(--space-1); }
 
 .btn-icon {
-  width: 32px; height: 32px;
+  width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
   border: none; border-radius: var(--radius-md); cursor: pointer;
   background: transparent; color: var(--color-text-3);
@@ -935,12 +927,11 @@ textarea::placeholder { color: var(--color-text-3); }
 .btn-stop:hover { background: var(--color-danger); color: #fff; }
 
 /* 模式选择器 */
-.input-mode-bar { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) var(--space-1); }
 .mode-selector-wrap { position: relative; }
-.btn-mode { display: flex; align-items: center; gap: 4px; padding: 3px var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-full); background: transparent; color: var(--color-text-2); font-size: 11px; font-family: inherit; cursor: pointer; transition: all var(--duration-fast); white-space: nowrap; }
+.btn-mode { display: flex; align-items: center; gap: 3px; padding: 3px var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-full); background: transparent; color: var(--color-text-2); font-size: 11px; font-family: inherit; cursor: pointer; transition: all var(--duration-fast); white-space: nowrap; height: 26px; }
 .btn-mode span { display: flex; align-items: center; gap: 3px; }
 .btn-mode:hover, .btn-mode--active { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-soft); }
-.mode-picker { position: absolute; bottom: calc(100% + 6px); left: 0; background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 4px 16px rgba(0,0,0,.1); min-width: 180px; z-index: 100; overflow: hidden; }
+.mode-picker { position: absolute; bottom: calc(100% + 6px); left: 0; background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 -4px 16px rgba(0,0,0,.1); min-width: 180px; z-index: 200; overflow: hidden; }
 .mode-option { display: flex; align-items: flex-start; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--text-sm); font-family: inherit; cursor: pointer; text-align: left; }
 .mode-option:hover:not(:disabled) { background: var(--color-paper-2); }
 .mode-option.active { color: var(--color-accent); }
@@ -951,10 +942,10 @@ textarea::placeholder { color: var(--color-text-3); }
 
 /* 知识库选择器 */
 .kb-selector-wrap { position: relative; }
-.btn-kb { display: flex; align-items: center; gap: 4px; padding: 3px var(--space-2); border: 1px solid var(--color-accent); border-radius: var(--radius-full); background: var(--color-accent-soft); color: var(--color-accent); font-size: 11px; font-family: inherit; cursor: pointer; max-width: 160px; }
+.btn-kb { display: flex; align-items: center; gap: 3px; padding: 3px var(--space-2); border: 1px solid var(--color-accent); border-radius: var(--radius-full); background: var(--color-accent-soft); color: var(--color-accent); font-size: 11px; font-family: inherit; cursor: pointer; max-width: 140px; height: 26px; }
 .btn-kb span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .btn-kb:hover, .btn-kb--active { background: var(--color-accent); color: #fff; }
-.kb-picker { position: absolute; bottom: calc(100% + 6px); left: 0; background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 4px 16px rgba(0,0,0,.1); min-width: 200px; max-height: 240px; overflow-y: auto; z-index: 100; }
+.kb-picker { position: absolute; bottom: calc(100% + 6px); left: 0; background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 -4px 16px rgba(0,0,0,.1); min-width: 200px; max-height: 240px; overflow-y: auto; z-index: 200; }
 .kb-picker-empty { padding: var(--space-3) var(--space-4); font-size: var(--text-xs); color: var(--color-text-3); }
 .kb-picker-item { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--text-sm); font-family: inherit; cursor: pointer; text-align: left; }
 .kb-picker-item:hover { background: var(--color-paper-2); }

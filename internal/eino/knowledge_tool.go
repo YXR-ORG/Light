@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -68,8 +69,8 @@ func (t *KnowledgeSearchTool) InvokableRun(_ context.Context, argumentsInJSON st
 
 	results, err := t.store.Search(args.Query, args.TopK)
 	if err != nil {
-		// 降级：返回空结果，不让 LLM 崩溃
-		return `{"results":[],"total":0}`, nil
+		slog.Warn("search_knowledge failed", "query", args.Query, "error", err)
+		return `{"results":[],"total":0,"error":"搜索失败，请重试"}`, nil
 	}
 
 	resp := searchResponse{Results: results, Total: len(results)}
