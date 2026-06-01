@@ -27,16 +27,30 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let unsubConvUpdated: (() => void) | null = null
 
 const agents = ref<storage.Agent[]>([])
+const showAgentDropdown = ref(false)
+const agentSelectRef = ref<HTMLElement | null>(null)
+
+const activeAgent = computed(() =>
+  agents.value.find(a => a.id === store.activeAgentId) ?? null
+)
 
 onMounted(() => {
   loadConversations()
   loadAgents()
   unsubConvUpdated = EventsOn('conversation:updated', handleConversationUpdated)
+  document.addEventListener('mousedown', onDocClick)
 })
 
 onUnmounted(() => {
   if (unsubConvUpdated) unsubConvUpdated()
+  document.removeEventListener('mousedown', onDocClick)
 })
+
+function onDocClick(e: MouseEvent) {
+  if (agentSelectRef.value && !agentSelectRef.value.contains(e.target as Node)) {
+    showAgentDropdown.value = false
+  }
+}
 
 async function handleConversationUpdated(_convId: string) {
   try {
@@ -146,19 +160,31 @@ async function newChat() {
       </button>
     </div>
 
-    <!-- 智能体选择条 -->
-    <div v-if="agents.length > 0" class="agent-bar">
-      <button
-        v-for="a in agents"
-        :key="a.id"
-        class="agent-chip"
-        :class="{ active: store.activeAgentId === a.id }"
-        :title="a.description"
-        @click="selectAgent(a)"
-      >
-        <span class="agent-chip-icon">{{ a.icon }}</span>
-        <span class="agent-chip-name">{{ a.name }}</span>
+    <!-- 智能体下拉选择器 -->
+    <div v-if="agents.length > 0" class="agent-select-wrap" ref="agentSelectRef">
+      <button class="agent-select-btn" @click="showAgentDropdown = !showAgentDropdown">
+        <span class="agent-select-icon">{{ activeAgent?.icon ?? '🤖' }}</span>
+        <span class="agent-select-name">{{ activeAgent?.name ?? '选择智能体' }}</span>
+        <svg class="agent-select-arrow" :class="{ open: showAgentDropdown }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
+      <transition name="dropdown">
+        <div v-if="showAgentDropdown" class="agent-dropdown">
+          <button
+            v-for="a in agents"
+            :key="a.id"
+            class="agent-dropdown-item"
+            :class="{ active: store.activeAgentId === a.id }"
+            @click="selectAgent(a); showAgentDropdown = false"
+          >
+            <span class="agent-dropdown-icon">{{ a.icon }}</span>
+            <div class="agent-dropdown-info">
+              <span class="agent-dropdown-name">{{ a.name }}</span>
+              <span class="agent-dropdown-desc">{{ a.description }}</span>
+            </div>
+            <svg v-if="store.activeAgentId === a.id" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" class="agent-dropdown-check"><polyline points="20 6 9 17 4 12"/></svg>
+          </button>
+        </div>
+      </transition>
     </div>
     <div class="conv-list">
       <ConversationItem
@@ -319,46 +345,84 @@ async function newChat() {
   padding: var(--space-2);
 }
 
-.agent-bar {
-  display: flex;
-  gap: var(--space-1);
-  padding: 0 var(--space-3) var(--space-2);
-  overflow-x: auto;
-  scrollbar-width: none;
+/* ── Agent selector ── */
+.agent-select-wrap {
+  position: relative;
+  margin: 0 var(--space-3) var(--space-2);
   flex-shrink: 0;
 }
-.agent-bar::-webkit-scrollbar { display: none; }
 
-.agent-chip {
+.agent-select-btn {
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px var(--space-2);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
+  background: var(--color-paper-2);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-text-2);
+  transition: border-color var(--duration-fast) var(--ease-out),
+              background var(--duration-fast) var(--ease-out);
+}
+.agent-select-btn:hover {
+  border-color: var(--color-accent);
+  background: var(--color-paper);
+}
+.agent-select-icon { font-size: 15px; line-height: 1; flex-shrink: 0; }
+.agent-select-name { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-select-arrow {
+  flex-shrink: 0;
+  color: var(--color-text-3);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+.agent-select-arrow.open { transform: rotate(180deg); }
+
+.agent-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0; right: 0;
+  z-index: 200;
+  background: var(--color-paper);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2);
+  border: none;
+  border-radius: var(--radius-md);
   background: transparent;
   cursor: pointer;
-  white-space: nowrap;
-  font-size: var(--text-xs);
-  color: var(--color-text-2);
+  text-align: left;
+  width: 100%;
   font-family: var(--font-body);
-  transition: border-color var(--duration-fast) var(--ease-out),
-              background var(--duration-fast) var(--ease-out),
-              color var(--duration-fast) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-out);
 }
-.agent-chip:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+.agent-dropdown-item:hover { background: var(--color-paper-3); }
+.agent-dropdown-item.active { background: var(--color-accent-soft); }
+.agent-dropdown-icon { font-size: 16px; line-height: 1; flex-shrink: 0; width: 24px; text-align: center; }
+.agent-dropdown-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.agent-dropdown-name { font-size: var(--text-sm); font-weight: 500; color: var(--color-text); }
+.agent-dropdown-desc { font-size: var(--text-xs); color: var(--color-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-dropdown-check { flex-shrink: 0; color: var(--color-accent); }
+
+.dropdown-enter-active, .dropdown-leave-active {
+  transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
 }
-.agent-chip.active {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-  font-weight: 500;
-}
-.agent-chip-icon { font-size: 13px; line-height: 1; }
-.agent-chip-name { max-width: 64px; overflow: hidden; text-overflow: ellipsis; }
+.dropdown-enter-from, .dropdown-leave-to { opacity: 0; transform: translateY(-4px); }
 
 .empty-list {
   text-align: center;
