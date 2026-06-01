@@ -30,6 +30,10 @@ export function Search(arg1) {
   return window['go']['handler']['ConversationHandler']['Search'](arg1);
 }
 
+export function SetAgent(arg1, arg2) {
+  return window['go']['handler']['ConversationHandler']['SetAgent'](arg1, arg2);
+}
+
 export function SetModel(arg1, arg2, arg3) {
   return window['go']['handler']['ConversationHandler']['SetModel'](arg1, arg2, arg3);
 }

@@ -125,10 +125,16 @@ async function testConnection() {
       </div>
       <div class="field">
         <label>类型</label>
-        <select v-model="form.type">
-          <option value="sse">SSE（HTTP 服务器）</option>
-          <option value="stdio">Stdio（本地进程）</option>
-        </select>
+        <div class="type-grid">
+          <button class="type-btn" :class="{ active: form.type === 'sse' }" @click="form.type = 'sse'">
+            SSE
+            <span class="type-desc">HTTP 服务器</span>
+          </button>
+          <button class="type-btn" :class="{ active: form.type === 'stdio' }" @click="form.type = 'stdio'">
+            Stdio
+            <span class="type-desc">本地进程</span>
+          </button>
+        </div>
       </div>
       <div v-if="form.type === 'sse'" class="field">
         <label>URL</label>
@@ -245,7 +251,7 @@ async function testConnection() {
 }
 .optional { color: var(--color-text-3); font-weight: 400; }
 
-.field input, .field select {
+.field input {
   width: 100%; padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border); border-radius: var(--radius-md);
   font-size: var(--text-sm); font-family: inherit; color: var(--color-text);
@@ -253,10 +259,36 @@ async function testConnection() {
   transition: border-color var(--duration-fast) var(--ease-out);
   box-sizing: border-box;
 }
-.field input:focus, .field select:focus {
+.field input:focus {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
+
+.type-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2);
+}
+.type-btn {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  background: var(--color-paper); color: var(--color-text-2);
+  font-size: var(--text-sm); font-family: inherit; font-weight: 500;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out),
+              background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+.type-btn:hover { border-color: var(--color-accent); color: var(--color-text); }
+.type-btn.active {
+  border-color: var(--color-accent); background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+.type-desc {
+  font-size: var(--text-xs); font-weight: 400;
+  color: var(--color-text-3);
+}
+.type-btn.active .type-desc { color: var(--color-accent); opacity: 0.8; }
 
 .test-result {
   padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);

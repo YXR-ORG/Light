@@ -37,6 +37,8 @@ export namespace handler {
 	    content: string;
 	    provider: string;
 	    model: string;
+	    agent_id: string;
+	    mcp_server_ids: string[];
 	    skill_ids: string[];
 	    web_search: boolean;
 	    ignore_context: boolean;
@@ -53,6 +55,8 @@ export namespace handler {
 	        this.content = source["content"];
 	        this.provider = source["provider"];
 	        this.model = source["model"];
+	        this.agent_id = source["agent_id"];
+	        this.mcp_server_ids = source["mcp_server_ids"];
 	        this.skill_ids = source["skill_ids"];
 	        this.web_search = source["web_search"];
 	        this.ignore_context = source["ignore_context"];
@@ -129,6 +133,8 @@ export namespace storage {
 	    provider: string;
 	    model: string;
 	    system_prompt: string;
+	    agent_id: string;
+	    mcp_server_ids: string;
 	    // Go type: time
 	    created_at: any;
 	    // Go type: time
@@ -145,6 +151,8 @@ export namespace storage {
 	        this.provider = source["provider"];
 	        this.model = source["model"];
 	        this.system_prompt = source["system_prompt"];
+	        this.agent_id = source["agent_id"];
+	        this.mcp_server_ids = source["mcp_server_ids"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	    }
@@ -250,6 +258,8 @@ export namespace storage {
 	    tool_calls?: string;
 	    tool_result?: string;
 	    attachments?: string;
+	    agent_id: string;
+	    mcp_server_ids: string;
 	    // Go type: time
 	    created_at: any;
 	
@@ -267,6 +277,8 @@ export namespace storage {
 	        this.tool_calls = source["tool_calls"];
 	        this.tool_result = source["tool_result"];
 	        this.attachments = source["attachments"];
+	        this.agent_id = source["agent_id"];
+	        this.mcp_server_ids = source["mcp_server_ids"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	    }
 	

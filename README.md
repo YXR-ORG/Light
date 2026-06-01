@@ -100,6 +100,57 @@ wails build -platform darwin/universal
 CC=x86_64-w64-mingw32-gcc wails build -platform windows/amd64
 ```
 
+### 图标规范
+
+图标源文件：`build/appicon.png`（原始备份：`build/appicon.png.bak`）
+
+**Dock 图标尺寸标准：内容占画布 80%，四周各留 10% 透明边距。**
+
+生成脚本（每次更换图标后执行）：
+
+```python
+from PIL import Image
+import numpy as np
+
+src = "build/appicon.png.bak"  # 原始全出血图
+dst = "build/appicon.png"
+
+img = Image.open(src).convert("RGBA")
+arr = np.array(img)
+alpha = arr[:,:,3]
+rows = np.any(alpha > 10, axis=1)
+cols = np.any(alpha > 10, axis=0)
+rmin, rmax = np.where(rows)[0][[0,-1]]
+cmin, cmax = np.where(cols)[0][[0,-1]]
+content = img.crop((cmin, rmin, cmax+1, rmax+1))
+
+canvas_size = 1024
+padding = 102  # 80% 内容占比
+target = canvas_size - padding * 2
+canvas = Image.new("RGBA", (canvas_size, canvas_size), (0,0,0,0))
+canvas.paste(content.resize((target, target), Image.LANCZOS), (padding, padding))
+canvas.save(dst)
+```
+
+生成 icns 并部署：
+
+```bash
+mkdir -p /tmp/Light.iconset
+python3 << 'EOF'
+from PIL import Image
+img = Image.open("build/appicon.png").convert("RGBA")
+for s in [16,32,64,128,256,512,1024]:
+    img.resize((s,s), Image.LANCZOS).save(f"/tmp/Light.iconset/icon_{s}x{s}.png")
+    if s <= 512:
+        img.resize((s*2,s*2), Image.LANCZOS).save(f"/tmp/Light.iconset/icon_{s}x{s}@2x.png")
+EOF
+iconutil -c icns /tmp/Light.iconset -o /tmp/Light.icns
+cp /tmp/Light.icns "/Applications/Light.app/Contents/Resources/iconfile.icns"
+touch "/Applications/Light.app"
+find ~/Library/Caches -name "com.apple.iconservices*" -delete
+killall iconservicesd; killall Dock
+```
+
 ## 技术栈
 
 | 层 | 技术 |
