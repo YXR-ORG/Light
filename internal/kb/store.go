@@ -282,8 +282,11 @@ func buildFTS5Query(query string) string {
 
 // Search 用 FTS5 检索，返回最多 topK 条结果
 func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
-	if topK <= 0 || topK > 10 {
-		topK = 5
+	if topK <= 0 {
+		topK = 10
+	}
+	if topK > 20 {
+		topK = 20
 	}
 
 	ftsQuery := buildFTS5Query(query)

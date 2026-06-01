@@ -31,16 +31,20 @@ func NewKnowledgeSearchTool(kbID, kbDir string) (*KnowledgeSearchTool, error) {
 func (t *KnowledgeSearchTool) Info(_ context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "search_knowledge",
-		Desc: "在知识库中搜索与问题相关的文档片段。当需要查找资料、回答基于文档的问题时，必须先调用此工具。",
+		Desc: `在知识库中搜索相关文档片段。使用规则：
+1. 必须先调用此工具再回答，不得凭空编造。
+2. 跨文档问题（如"A和B有什么关系"）：必须分别搜索每个实体，至少调用2次。
+3. 每次查询用单一精确词，不要把多个概念混在一个query里。
+4. 搜索结果不足时换不同关键词重试，最多搜索3轮。`,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"query": {
 				Type:     schema.String,
-				Desc:     "搜索查询词，用自然语言描述要查找的内容",
+				Desc:     "搜索关键词，每次只搜一个核心概念，如人名、地名、事件名",
 				Required: true,
 			},
 			"top_k": {
 				Type:     schema.Integer,
-				Desc:     "返回结果数量，默认 5，最大 10",
+				Desc:     "返回结果数量，默认 10，最大 20",
 				Required: false,
 			},
 		}),

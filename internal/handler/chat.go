@@ -364,7 +364,13 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 		systemContent += "\nYou have access to a web_search tool. Use it to find current information. After 1-2 searches, synthesize the results and provide a final answer."
 	}
 	if req.Mode == "knowledge" && req.KnowledgeBaseID != "" {
-		systemContent += "\nYou have access to a search_knowledge tool. When answering questions that require document knowledge, you MUST call search_knowledge first. Always cite your sources."
+		systemContent += `
+你有 search_knowledge 工具可以查询知识库。严格遵守以下规则：
+- 回答前必须先搜索，禁止凭空编造。
+- 涉及多个实体或跨文档问题时，必须对每个实体单独搜索（如问"A和B"，先搜A再搜B）。
+- 每次 query 只包含一个核心词（人名/地名/事件），不要把多个概念混在一起。
+- 拿到搜索结果后，综合所有片段进行推理和回答，明确标注信息来源于哪个文档。
+- 如果搜索结果不足，换关键词重试，最多3轮。`
 	}
 	einoMsgs = append(einoMsgs, &schema.Message{
 		Role:    schema.System,
