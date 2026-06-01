@@ -9,13 +9,14 @@
 
 ## 简介
 
-Light 是一款基于 [Wails](https://wails.io) + [eino](https://github.com/cloudwego/eino) 构建的桌面 AI 对话客户端，支持多模型供应商、联网搜索、Skills 技能系统、MCP 工具协议等特性，界面简洁，开箱即用。
+Light 是一款基于 [Wails](https://wails.io) + [eino](https://github.com/cloudwego/eino) 构建的桌面 AI 对话客户端，支持多模型供应商、联网搜索、Skills 技能系统、MCP 工具协议、本地知识库等特性，界面简洁，开箱即用。
 
 ## 功能特性
 
 - **多模型支持**：OpenAI、Claude、DeepSeek、Gemini、通义千问、火山方舟、Ollama 本地模型等
 - **流式输出**：打字机效果实时展示 AI 回复，支持思考链（Thinking）展示
 - **联网搜索**：集成 Tavily Search API，AI 可自动调用搜索获取最新信息
+- **本地知识库**：上传文档（TXT/MD/PDF/DOCX/Excel），基于 FTS5 全文检索，AI 挂载知识库问答
 - **Skills 广场**：上传 ZIP 包导入技能（SKILL.md 格式），问答时多选调用
 - **智能体**：内置多种角色（通用助手、代码专家、写作助手等），支持自定义
 - **MCP 协议**：支持 stdio / SSE 两种方式接入 MCP 工具服务
@@ -93,11 +94,16 @@ wails dev
 ### 构建
 
 ```bash
+# 使用 Makefile（推荐，自动带 fts5 tag）
+make build        # 构建
+make install      # 构建并安装到 /Applications（macOS）
+
+# 手动构建（必须带 -tags fts5，否则知识库 FTS5 不可用）
 # macOS Universal
-wails build -platform darwin/universal
+wails build -tags fts5 -platform darwin/universal
 
 # Windows
-CC=x86_64-w64-mingw32-gcc wails build -platform windows/amd64
+CC=x86_64-w64-mingw32-gcc wails build -tags fts5 -platform windows/amd64
 ```
 
 ### 图标规范
@@ -158,7 +164,7 @@ killall iconservicesd; killall Dock
 | 桌面框架 | [Wails](https://wails.io) v2 |
 | AI 框架 | [eino](https://github.com/cloudwego/eino) |
 | 前端 | Vue 3 + TypeScript + Vite |
-| 数据库 | SQLite（GORM） |
+| 数据库 | SQLite（GORM + FTS5 trigram） |
 | 搜索 | Tavily Search API |
 
 ## 数据存储
@@ -166,10 +172,79 @@ killall iconservicesd; killall Dock
 所有数据（对话记录、API Key、设置）存储在本地：
 
 ```
-~/.wails-chat/chat.db
+~/.wails-chat/chat.db                          # 主数据库
+~/.wails-chat/knowledgebases/{id}/kb.db        # 每个知识库独立数据库
 ```
 
 API Key 不会上传到任何服务器。
+
+## 知识库使用
+
+1. 打开 **设置 → 知识库**，点击「新建知识库」
+2. 进入知识库，点击「上传文件」（支持 TXT / MD / PDF / DOCX / Excel）
+3. 等待文档状态变为「就绪」
+4. 回到对话界面，点击输入框左下角「问答」切换为「知识」模式
+5. 选择知识库，发送问题
+
+**跨文档问题**（如"A 和 B 有什么共同点"）：AI 会自动分别搜索每个实体，再综合推理回答。
+
+## 知识库 TODO
+
+当前知识库基于 FTS5 全文检索（trigram tokenizer），能可靠处理中文任意子串匹配。以下三个方向是下一步的演进路径，按优先级排序：
+
+### TODO 1：文档摘要索引（短期，低成本）
+
+**问题**：FTS5 只能匹配关键词，无法理解"这篇文档讲的是什么"。文档量大时，模型需要多次搜索才能定位到正确文档。
+
+**方案**：文档上传时，用 LLM 生成每个文档的摘要（人物、主题、关键事件）和关键实体列表，存入 `summaries` 表。搜索时先搜摘要层定位文档，再搜 chunk 层取内容（两阶段检索）。
+
+```sql
+CREATE TABLE summaries (
+  doc_id TEXT PRIMARY KEY,
+  summary TEXT,        -- LLM 生成的文档摘要
+  key_entities TEXT,   -- JSON 数组，如 ["张嘎", "奶奶", "鬼子"]
+  created_at DATETIME
+);
+```
+
+**预期效果**：减少无效搜索轮次，跨文档问题定位更准确。
+
+---
+
+### TODO 2：向量检索 + RRF 混合（中期，根本解决语义问题）
+
+**问题**：关键词检索无法理解语义。"勇敢的少年"和"机智的小鬼"语义相同，但 FTS5 找不到关联。这是当前架构的根本局限。
+
+**方案**：
+1. 用本地 embedding 模型（如 `nomic-embed-text`，通过 Ollama 运行，无需 API Key）把每个 chunk 转成向量
+2. 存入已预留的 `vectors` 表（`embedding BLOB`）
+3. 搜索时并行执行 FTS5（关键词）+ 向量相似度（语义）两路检索
+4. 用 **RRF（Reciprocal Rank Fusion）** 合并两路结果，取长补短
+
+```
+用户问题 → embedding → 向量相似度检索 ─┐
+                                        ├→ RRF 融合 → top-k chunks → LLM
+用户问题 → FTS5 关键词检索 ────────────┘
+```
+
+**预期效果**：语义相近的内容能被召回，跨文档推理质量大幅提升。`vectors` 表已预留，等 Ollama embedding API 集成后可直接启用。
+
+---
+
+### TODO 3：知识图谱 / 实体关系索引（长期，复杂场景）
+
+**问题**：文档间的实体关系（人物关系、事件因果、概念层级）无法被检索层感知。适合企业知识库、法律文档、医疗记录等有明确实体关系的场景。
+
+**方案**：
+1. 文档上传时，用 LLM 抽取实体和关系（`孙小仙 is_character_in 公平国往事`）
+2. 存入图结构（可用 SQLite 的邻接表模拟，无需引入图数据库）
+3. 查询时识别问题中的实体，图遍历找关联实体，结合向量检索召回相关 chunk
+
+**适用场景**：文档间有明确关联关系时（如人物关系谱、产品文档体系）。对创意推断类问题（"张嘎进入公平国会发生什么"）帮助有限，因为两个文档本来就没有关系，是用户在做跨文档创意推断。
+
+---
+
+> 详细问题复盘见 [docs/KNOWLEDGE_BASE_POSTMORTEM.md](docs/KNOWLEDGE_BASE_POSTMORTEM.md)
 
 ## License
 
