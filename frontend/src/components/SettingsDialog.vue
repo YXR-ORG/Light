@@ -10,6 +10,7 @@ import { ListAgents, SaveAgent, DeleteAgent } from '../../wailsjs/go/handler/Age
 import { ListSkills, SaveSkill, ToggleSkill, DeleteSkill, ImportSkillZip } from '../../wailsjs/go/handler/SkillHandler'
 import { Get as GetSetting, Set as SetSetting } from '../../wailsjs/go/handler/SettingsHandler'
 import { SaveConfig, GetConfig, Backup, ListBackups, Restore, DeleteBackup } from '../../wailsjs/go/handler/BackupHandler'
+import { BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import AboutPanel from './AboutPanel.vue'
 import type { storage, handler } from '../../wailsjs/go/models'
 
@@ -445,6 +446,7 @@ function formatSize(bytes: number): string {
                     <button v-for="e in searchEngines" :key="e.value"
                       class="engine-tab" :class="{ active: searchEngine === e.value }"
                       @click="selectEngine(e.value)">
+                      <svg v-if="searchEngine === e.value" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                       {{ e.label }}
                     </button>
                   </div>
@@ -454,7 +456,7 @@ function formatSize(bytes: number): string {
                 <template v-if="searchEngine === 'tavily'">
                   <div class="field">
                     <label>Tavily API Key
-                      <a href="https://app.tavily.com" target="_blank" class="setting-link">申请免费 Key →</a>
+                      <a href="#" class="setting-link" @click.prevent="BrowserOpenURL('https://app.tavily.com')">申请免费 Key →</a>
                     </label>
                     <div style="display:flex;gap:var(--space-2)">
                       <input v-model="searchKeys.tavily" type="password" placeholder="tvly-..." autocomplete="off" style="flex:1" />
@@ -469,7 +471,7 @@ function formatSize(bytes: number): string {
                 <template v-else-if="searchEngine === 'exa'">
                   <div class="field">
                     <label>Exa API Key
-                      <a href="https://dashboard.exa.ai" target="_blank" class="setting-link">申请 Key →</a>
+                      <a href="#" class="setting-link" @click.prevent="BrowserOpenURL('https://dashboard.exa.ai')">申请 Key →</a>
                     </label>
                     <div style="display:flex;gap:var(--space-2)">
                       <input v-model="searchKeys.exa" type="password" placeholder="exa-..." autocomplete="off" style="flex:1" />
@@ -484,7 +486,7 @@ function formatSize(bytes: number): string {
                 <template v-else-if="searchEngine === 'brave'">
                   <div class="field">
                     <label>Brave Search API Key
-                      <a href="https://api.search.brave.com/app/keys" target="_blank" class="setting-link">申请 Key →</a>
+                      <a href="#" class="setting-link" @click.prevent="BrowserOpenURL('https://api.search.brave.com/app/keys')">申请 Key →</a>
                     </label>
                     <div style="display:flex;gap:var(--space-2)">
                       <input v-model="searchKeys.brave" type="password" placeholder="BSA..." autocomplete="off" style="flex:1" />
@@ -499,7 +501,7 @@ function formatSize(bytes: number): string {
                 <template v-else-if="searchEngine === 'searxng'">
                   <div class="field">
                     <label>SearXNG 实例地址
-                      <a href="https://searx.space" target="_blank" class="setting-link">公共实例列表 →</a>
+                      <a href="#" class="setting-link" @click.prevent="BrowserOpenURL('https://searx.space')">公共实例列表 →</a>
                     </label>
                     <div style="display:flex;gap:var(--space-2)">
                       <input v-model="searchKeys.searxng" type="text" placeholder="https://searx.be" autocomplete="off" style="flex:1" />
@@ -958,6 +960,7 @@ function formatSize(bytes: number): string {
 
 .engine-tabs { display: flex; gap: var(--space-1); flex-wrap: wrap; margin-top: var(--space-1); }
 .engine-tab {
+  display: flex; align-items: center; gap: 5px;
   padding: var(--space-1) var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
