@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { StreamChat, CancelStream, PickAttachments } from '../../wailsjs/go/handler/ChatHandler'
 import { Get } from '../../wailsjs/go/handler/SettingsHandler'
@@ -32,12 +32,43 @@ async function loadKBs() {
   availableKBs.value = await ListKnowledgeBases().catch(() => [])
 }
 
+// 模式/知识库 picker 的 body 绝对定位样式
+const modPickerStyle = ref<Record<string, string>>({})
+const kbPickerStyle = ref<Record<string, string>>({})
+
+function calcPickerPos(btnClass: string): Record<string, string> {
+  const btn = document.querySelector(btnClass) as HTMLElement
+  if (!btn) return {}
+  const r = btn.getBoundingClientRect()
+  return {
+    position: 'fixed',
+    left: r.left + 'px',
+    bottom: (window.innerHeight - r.top + 6) + 'px',
+    zIndex: '9999',
+  }
+}
+
 function toggleModePicker() {
   showModePicker.value = !showModePicker.value
   showKBPicker.value = false
   showModelPicker.value = false
   showSkillPicker.value = false
   showMCPPicker.value = false
+  if (showModePicker.value) {
+    nextTick(() => { modPickerStyle.value = calcPickerPos('.btn-mode') })
+  }
+}
+
+function toggleKBPicker() {
+  showKBPicker.value = !showKBPicker.value
+  showModePicker.value = false
+  showModelPicker.value = false
+  showSkillPicker.value = false
+  showMCPPicker.value = false
+  if (showKBPicker.value) {
+    loadKBs()
+    nextTick(() => { kbPickerStyle.value = calcPickerPos('.btn-kb') })
+  }
 }
 
 function selectMode(mode: ChatMode) {
@@ -49,15 +80,6 @@ function selectMode(mode: ChatMode) {
       selectedKBID.value = availableKBs.value[0].id
     }
   }
-}
-
-function toggleKBPicker() {
-  showKBPicker.value = !showKBPicker.value
-  showModePicker.value = false
-  showModelPicker.value = false
-  showSkillPicker.value = false
-  showMCPPicker.value = false
-  if (showKBPicker.value) loadKBs()
 }
 
 const selectedKBName = computed(() => {
@@ -188,13 +210,17 @@ function toggleModelPicker() {
 function onClickOutside(e: MouseEvent) {
   const el = document.querySelector('.input-area')
   if (el && !el.contains(e.target as Node)) {
+    // 点击在 input-area 外，但 Teleport 的 picker 在 body 里，需要单独检查
+    const modePicker = document.querySelector('.mode-picker')
+    const kbPicker = document.querySelector('.kb-picker')
+    if (!modePicker?.contains(e.target as Node)) showModePicker.value = false
+    if (!kbPicker?.contains(e.target as Node)) showKBPicker.value = false
     showModelPicker.value = false
     showSkillPicker.value = false
     showMCPPicker.value = false
-    showModePicker.value = false
-    showKBPicker.value = false
     return
   }
+  // 点击在 input-area 内部
   const skillPicker = document.querySelector('.skill-picker')
   const skillBtn = document.querySelector('.btn-skill-picker')
   if (showSkillPicker.value && skillPicker && !skillPicker.contains(e.target as Node) && !skillBtn?.contains(e.target as Node)) {
@@ -210,6 +236,7 @@ function onClickOutside(e: MouseEvent) {
   if (showMCPPicker.value && mcpPicker && !mcpPicker.contains(e.target as Node) && !mcpBtn?.contains(e.target as Node)) {
     showMCPPicker.value = false
   }
+  // mode-picker 和 kb-picker 在 body（Teleport），点击按钮本身不关闭（由 toggle 处理）
   const modePicker = document.querySelector('.mode-picker')
   const modeBtn = document.querySelector('.btn-mode')
   if (showModePicker.value && modePicker && !modePicker.contains(e.target as Node) && !modeBtn?.contains(e.target as Node)) {
@@ -430,18 +457,11 @@ function onKeydown(e: KeyboardEvent) {
     </div>
 
     <div class="input-inner">
-      <textarea
-        v-model="input"
-        placeholder="输入消息..."
-        :disabled="store.streaming"
-        @keydown="onKeydown"
-        @focus="showModelPicker = false; showModePicker = false; showKBPicker = false"
-        rows="1"
-      />
+      <!-- 工具栏（上行） -->
       <div class="input-actions">
         <!-- 模式选择器 -->
         <div class="mode-selector-wrap">
-          <button class="btn-mode" :class="{ 'btn-mode--active': showModePicker || chatMode !== 'chat' }" @click="toggleModePicker" title="切换对话模式">
+          <button class="btn-mode" :class="{ 'btn-mode--active': showModePicker || chatMode !== 'chat' }" @click.stop="toggleModePicker" title="切换对话模式">
             <span v-if="chatMode === 'chat'">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
               问答
@@ -452,37 +472,14 @@ function onKeydown(e: KeyboardEvent) {
             </span>
             <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
-          <div v-if="showModePicker" class="mode-picker">
-            <button class="mode-option" :class="{ active: chatMode === 'chat' }" @click="selectMode('chat')">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-              <div><div class="mode-name">问答</div><div class="mode-desc">默认对话模式</div></div>
-            </button>
-            <button class="mode-option" :class="{ active: chatMode === 'knowledge' }" @click="selectMode('knowledge')">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-              <div><div class="mode-name">知识</div><div class="mode-desc">挂载知识库问答</div></div>
-            </button>
-            <button class="mode-option mode-option--disabled" disabled>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-              <div><div class="mode-name">任务 <span class="mode-soon">即将推出</span></div><div class="mode-desc">自主 Agent 模式</div></div>
-            </button>
-          </div>
         </div>
         <!-- 知识库选择器（仅 knowledge 模式） -->
         <div v-if="chatMode === 'knowledge'" class="kb-selector-wrap">
-          <button class="btn-kb" :class="{ 'btn-kb--active': showKBPicker }" @click="toggleKBPicker">
+          <button class="btn-kb" :class="{ 'btn-kb--active': showKBPicker }" @click.stop="toggleKBPicker">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
             <span>{{ selectedKBName }}</span>
             <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
-          <div v-if="showKBPicker" class="kb-picker">
-            <div v-if="availableKBs.length === 0" class="kb-picker-empty">还没有知识库，请先在设置中创建</div>
-            <button v-for="kb in availableKBs" :key="kb.id"
-              class="kb-picker-item" :class="{ active: selectedKBID === kb.id }"
-              @click="selectedKBID = kb.id; showKBPicker = false">
-              <span class="kb-picker-name">{{ kb.name }}</span>
-              <span class="kb-picker-count">{{ kb.doc_count }} 文档</span>
-            </button>
-          </div>
         </div>
         <!-- 分隔线 -->
         <div class="actions-sep"></div>
@@ -499,7 +496,7 @@ function onKeydown(e: KeyboardEvent) {
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
         </button>
         <!-- Skills -->
-        <button class="btn-tool" :class="{ active: showSkillPicker || selectedSkillIDs.length > 0 }" @click="toggleSkillPicker" title="选择技能">
+        <button class="btn-tool btn-skill-picker" :class="{ active: showSkillPicker || selectedSkillIDs.length > 0 }" @click="toggleSkillPicker" title="选择技能">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
           <span v-if="selectedSkillIDs.length > 0" class="skill-count">{{ selectedSkillIDs.length }}</span>
         </button>
@@ -521,7 +518,42 @@ function onKeydown(e: KeyboardEvent) {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/></svg>
         </button>
       </div>
+      <!-- textarea（下行） -->
+      <textarea
+        v-model="input"
+        placeholder="输入消息..."
+        :disabled="store.streaming"
+        @keydown="onKeydown"
+        rows="1"
+      />
     </div>
+
+    <!-- mode-picker 和 kb-picker 渲染在 input-area 层，避免被 input-inner 裁剪 -->
+    <Teleport to="body">
+      <div v-if="showModePicker" class="mode-picker" :style="modPickerStyle">
+        <button class="mode-option" :class="{ active: chatMode === 'chat' }" @click="selectMode('chat')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <div><div class="mode-name">问答</div><div class="mode-desc">默认对话模式</div></div>
+        </button>
+        <button class="mode-option" :class="{ active: chatMode === 'knowledge' }" @click="selectMode('knowledge')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          <div><div class="mode-name">知识</div><div class="mode-desc">挂载知识库问答</div></div>
+        </button>
+        <button class="mode-option mode-option--disabled" disabled>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <div><div class="mode-name">任务 <span class="mode-soon">即将推出</span></div><div class="mode-desc">自主 Agent 模式</div></div>
+        </button>
+      </div>
+      <div v-if="showKBPicker" class="kb-picker" :style="kbPickerStyle">
+        <div v-if="availableKBs.length === 0" class="kb-picker-empty">还没有知识库，请先在设置中创建</div>
+        <button v-for="kb in availableKBs" :key="kb.id"
+          class="kb-picker-item" :class="{ active: selectedKBID === kb.id }"
+          @click="selectedKBID = kb.id; showKBPicker = false">
+          <span class="kb-picker-name">{{ kb.name }}</span>
+          <span class="kb-picker-count">{{ kb.doc_count }} 文档</span>
+        </button>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -803,12 +835,23 @@ function onKeydown(e: KeyboardEvent) {
   background: var(--color-paper-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
-  padding: var(--space-2) var(--space-3) var(--space-2);
+  padding: var(--space-2) var(--space-3);
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 .input-inner:focus-within {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+.input-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-1);
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
 textarea {
@@ -826,17 +869,6 @@ textarea {
   padding: var(--space-1) 0;
 }
 textarea::placeholder { color: var(--color-text-3); }
-
-.input-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding-top: var(--space-1);
-  border-top: 1px solid var(--color-border);
-  margin-top: var(--space-1);
-  flex-wrap: nowrap;
-  overflow: hidden;
-}
 
 .actions-sep {
   flex: 1;
@@ -931,7 +963,7 @@ textarea.has-attach-btn {
 .btn-mode { display: flex; align-items: center; gap: 3px; padding: 3px var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-full); background: transparent; color: var(--color-text-2); font-size: 11px; font-family: inherit; cursor: pointer; transition: all var(--duration-fast); white-space: nowrap; height: 26px; }
 .btn-mode span { display: flex; align-items: center; gap: 3px; }
 .btn-mode:hover, .btn-mode--active { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-soft); }
-.mode-picker { position: absolute; bottom: calc(100% + 6px); left: 0; background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 -4px 16px rgba(0,0,0,.1); min-width: 180px; z-index: 200; overflow: hidden; }
+.mode-picker { background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 -4px 20px rgba(0,0,0,.12); min-width: 180px; overflow: hidden; }
 .mode-option { display: flex; align-items: flex-start; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--text-sm); font-family: inherit; cursor: pointer; text-align: left; }
 .mode-option:hover:not(:disabled) { background: var(--color-paper-2); }
 .mode-option.active { color: var(--color-accent); }
@@ -945,7 +977,7 @@ textarea.has-attach-btn {
 .btn-kb { display: flex; align-items: center; gap: 3px; padding: 3px var(--space-2); border: 1px solid var(--color-accent); border-radius: var(--radius-full); background: var(--color-accent-soft); color: var(--color-accent); font-size: 11px; font-family: inherit; cursor: pointer; max-width: 140px; height: 26px; }
 .btn-kb span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .btn-kb:hover, .btn-kb--active { background: var(--color-accent); color: #fff; }
-.kb-picker { position: absolute; bottom: calc(100% + 6px); left: 0; background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 -4px 16px rgba(0,0,0,.1); min-width: 200px; max-height: 240px; overflow-y: auto; z-index: 200; }
+.kb-picker { background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 -4px 20px rgba(0,0,0,.12); min-width: 200px; max-height: 240px; overflow-y: auto; }
 .kb-picker-empty { padding: var(--space-3) var(--space-4); font-size: var(--text-xs); color: var(--color-text-3); }
 .kb-picker-item { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--text-sm); font-family: inherit; cursor: pointer; text-align: left; }
 .kb-picker-item:hover { background: var(--color-paper-2); }
