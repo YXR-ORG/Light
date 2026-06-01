@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"mime"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +80,51 @@ func (h *ChatHandler) CancelStream() {
 		h.cancel()
 		h.cancel = nil
 	}
+}
+
+const maxAttachmentSize = 10 * 1024 * 1024 // 10MB
+
+// PickAttachments 弹出系统文件选择框，读取文件内容并返回附件列表（含 base64 data）。
+// 由后端完成文件读取，前端无需处理文件 IO 或 base64 编码。
+func (h *ChatHandler) PickAttachments() ([]Attachment, error) {
+	paths, err := runtime.OpenMultipleFilesDialog(h.ctx, runtime.OpenDialogOptions{
+		Title: "选择附件",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "图片", Pattern: "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp"},
+			{DisplayName: "文档", Pattern: "*.txt;*.md;*.csv;*.json;*.yaml;*.xml;*.html;*.pdf"},
+			{DisplayName: "代码", Pattern: "*.go;*.py;*.js;*.ts;*.java;*.sql;*.sh;*.rs;*.cpp;*.c"},
+			{DisplayName: "所有文件", Pattern: "*"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+
+	var attachments []Attachment
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			slog.Warn("PickAttachments: read file failed", "path", p, "error", err)
+			continue
+		}
+		if len(data) > maxAttachmentSize {
+			slog.Warn("PickAttachments: file too large, skipped", "path", p, "size", len(data))
+			continue
+		}
+		mimeType := mime.TypeByExtension(filepath.Ext(p))
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		attachments = append(attachments, Attachment{
+			Name:     filepath.Base(p),
+			MimeType: mimeType,
+			Data:     base64.StdEncoding.EncodeToString(data),
+		})
+	}
+	return attachments, nil
 }
 
 // loadMCPTools connects to all enabled MCP servers and returns their tools.

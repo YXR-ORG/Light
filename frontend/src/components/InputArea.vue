@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '../stores/chat'
-import { StreamChat, CancelStream } from '../../wailsjs/go/handler/ChatHandler'
+import { StreamChat, CancelStream, PickAttachments } from '../../wailsjs/go/handler/ChatHandler'
 import { Get } from '../../wailsjs/go/handler/SettingsHandler'
 import { SetModel } from '../../wailsjs/go/handler/ConversationHandler'
 import { ListEnabledModels, ListProviders } from '../../wailsjs/go/handler/ProviderHandler'
@@ -21,26 +21,11 @@ const ignoreContext = computed(() => store.contextCutoffId !== null)
 
 interface Attachment { name: string; mime_type: string; data: string }
 const attachments = ref<Attachment[]>([])
-const fileInputRef = ref<HTMLInputElement | null>(null)
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
-
-async function handleFileSelect(e: Event) {
-  const files = (e.target as HTMLInputElement).files
-  if (!files) return
-  for (const file of Array.from(files)) {
-    if (file.size > MAX_FILE_SIZE) {
-      alert(`文件 ${file.name} 超过 10MB 限制`)
-      continue
-    }
-    const buf = await file.arrayBuffer()
-    const bytes = new Uint8Array(buf)
-    let binary = ''
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
-    const b64 = btoa(binary)
-    attachments.value.push({ name: file.name, mime_type: file.type || 'application/octet-stream', data: b64 })
-  }
-  ;(e.target as HTMLInputElement).value = ''
+async function pickAttachments() {
+  const picked = await PickAttachments().catch(() => null)
+  if (!picked) return
+  attachments.value.push(...picked)
 }
 
 function removeAttachment(idx: number) {
@@ -389,10 +374,7 @@ function onKeydown(e: KeyboardEvent) {
 
     <div class="input-inner">
       <!-- 附件上传按钮：textarea 内左下角 -->
-      <input ref="fileInputRef" type="file" multiple
-        accept="image/*,.txt,.md,.csv,.json,.py,.js,.ts,.go,.java,.html,.css,.xml,.yaml,.yml,.sh,.sql"
-        style="display:none" @change="handleFileSelect" />
-      <button class="btn-attach-inner" @click="fileInputRef?.click()"
+      <button class="btn-attach-inner" @click="pickAttachments()"
         :title="'上传文件或图片（最大 10MB）'"
         :class="{ active: attachments.length > 0 }">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">

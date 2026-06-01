@@ -280,12 +280,43 @@ Tool call 结果存入 `Message.ToolResult`（已有字段）。前端 `MessageI
 
 - 顶部：知识库名称 + 返回按钮
 - 文档列表：文件名、大小、状态（处理中/就绪/错误）、分块数、操作（删除）
-- 上传区域：拖拽或点击上传，支持多文件，显示上传进度
+- "上传文件"按钮：点击后由**后端调用 `runtime.OpenMultipleFilesDialog`** 弹出系统原生文件选择框，返回路径列表后后端直接读取，无需经过前端传输
 - 状态轮询：处理中的文档每 2 秒刷新状态
 
-### 5.4 文件大小限制
+### 5.4 文件上传方式（Wails 原生）
 
-单文件最大 50MB，超出提示错误。
+**不使用 base64 / HTML `<input type="file">`**，改为 Wails 原生对话框方案：
+
+```
+前端点击"上传文件"
+  → 调用 KnowledgeHandler.PickAndUploadDocuments(kbID)
+  → 后端 runtime.OpenMultipleFilesDialog(ctx, OpenDialogOptions{Filters: [...]})
+  → 返回 []string 文件路径
+  → 后端逐个 os.ReadFile(path) 处理
+  → 返回 []KBDocument（含初始状态）
+  → 前端开始轮询状态
+```
+
+优点：零 IPC 传输开销，50MB 文件无压力，是 Wails 客户端标准做法。
+
+Handler 签名：
+```go
+// PickAndUploadDocuments 弹出系统文件选择框，选中后直接处理，无需前端传文件内容
+func (h *KnowledgeHandler) PickAndUploadDocuments(kbID string) ([]KBDocument, error)
+```
+
+支持的文件类型过滤器（传给 OpenMultipleFilesDialog）：
+```go
+Filters: []runtime.FileFilter{
+    {DisplayName: "文档文件", Pattern: "*.pdf;*.docx;*.xlsx;*.txt;*.md;*.csv;*.json;*.yaml;*.xml;*.html"},
+    {DisplayName: "代码文件", Pattern: "*.go;*.py;*.js;*.ts;*.java;*.sql;*.sh;*.rs;*.cpp;*.c"},
+    {DisplayName: "所有文件", Pattern: "*"},
+}
+```
+
+### 5.5 文件大小限制
+
+单文件最大 50MB，后端读取后检查 `len(data)` 超出则跳过并记录错误，不中断其他文件处理。
 
 ---
 
@@ -308,8 +339,8 @@ func (h *KnowledgeHandler) DeleteKnowledgeBase(id string) error
 // ListDocuments 列出知识库内的文档
 func (h *KnowledgeHandler) ListDocuments(kbID string) ([]KBDocument, error)
 
-// UploadDocument 上传并处理文档（接收 base64 编码的文件内容）
-func (h *KnowledgeHandler) UploadDocument(kbID, filename, mimeType, dataBase64 string) (*KBDocument, error)
+// PickAndUploadDocuments 弹出系统文件选择框，选中后直接读取处理，无需前端传文件内容
+func (h *KnowledgeHandler) PickAndUploadDocuments(kbID string) ([]KBDocument, error)
 
 // DeleteDocument 删除文档（含原始文件和所有 chunks）
 func (h *KnowledgeHandler) DeleteDocument(kbID, docID string) error

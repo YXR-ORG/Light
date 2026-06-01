@@ -6,6 +6,10 @@ export function CancelStream() {
   return window['go']['handler']['ChatHandler']['CancelStream']();
 }
 
+export function PickAttachments() {
+  return window['go']['handler']['ChatHandler']['PickAttachments']();
+}
+
 export function SetContext(arg1) {
   return window['go']['handler']['ChatHandler']['SetContext'](arg1);
 }
