@@ -16,6 +16,7 @@ export const useChatStore = defineStore('chat', () => {
   const streamThinking = ref('')
   // ID of the last message BEFORE the context cutoff (null = no cutoff)
   const contextCutoffId = ref<string | null>(null)
+  const activeAgentId = ref<string | null>(null)
 
   let pendingQueue = ''
   let timerId: ReturnType<typeof setInterval> | null = null
@@ -107,11 +108,15 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function setActiveAgent(id: string | null) {
+    activeAgentId.value = id
+  }
+
   return {
     conversations, currentConvId, messages, streaming, streamContent, streamThinking,
-    contextCutoffId,
+    contextCutoffId, activeAgentId,
     setConversations, setCurrentConv, setMessages, appendMessage,
     setStreaming, appendStream, appendThinking, finishStream, resetStream,
-    toggleContextCutoff,
+    toggleContextCutoff, setActiveAgent,
   }
 })

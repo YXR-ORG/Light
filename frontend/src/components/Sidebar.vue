@@ -7,6 +7,9 @@ import ConversationItem from './ConversationItem.vue'
 import { Create, Delete, List, Search, GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 import { Get } from '../../wailsjs/go/handler/SettingsHandler'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
+import { ListAgents } from '../../wailsjs/go/handler/AgentHandler'
+import { SetAgent } from '../../wailsjs/go/handler/ConversationHandler'
+import type { storage } from '../../wailsjs/go/models'
 
 const store = useChatStore()
 const settingsStore = useSettingsStore()
@@ -23,8 +26,11 @@ const searchQuery = ref('')
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let unsubConvUpdated: (() => void) | null = null
 
+const agents = ref<storage.Agent[]>([])
+
 onMounted(() => {
   loadConversations()
+  loadAgents()
   unsubConvUpdated = EventsOn('conversation:updated', handleConversationUpdated)
 })
 
@@ -44,6 +50,17 @@ async function loadConversations() {
   } catch { /* ignore */ }
 }
 
+async function loadAgents() {
+  agents.value = await ListAgents().catch(() => [])
+}
+
+async function selectAgent(agent: storage.Agent) {
+  store.setActiveAgent(agent.id)
+  if (store.currentConvId) {
+    await SetAgent(store.currentConvId, agent.id).catch(console.error)
+  }
+}
+
 watch(searchQuery, (q) => {
   if (debounceTimer) clearTimeout(debounceTimer)
   debounceTimer = setTimeout(async () => {
@@ -60,6 +77,9 @@ async function selectConv(id: string) {
   store.setCurrentConv(id)
   const msgs = await GetMessages(id)
   store.setMessages(msgs)
+  // 同步当前对话的 agent_id
+  const conv = store.conversations.find(c => c.id === id)
+  store.setActiveAgent((conv as any)?.agent_id || null)
 }
 
 async function deleteConv(id: string) {
@@ -123,6 +143,21 @@ async function newChat() {
       />
       <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''" title="清除">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <!-- 智能体选择条 -->
+    <div v-if="agents.length > 0" class="agent-bar">
+      <button
+        v-for="a in agents"
+        :key="a.id"
+        class="agent-chip"
+        :class="{ active: store.activeAgentId === a.id }"
+        :title="a.description"
+        @click="selectAgent(a)"
+      >
+        <span class="agent-chip-icon">{{ a.icon }}</span>
+        <span class="agent-chip-name">{{ a.name }}</span>
       </button>
     </div>
     <div class="conv-list">
@@ -283,6 +318,47 @@ async function newChat() {
   overflow-y: auto;
   padding: var(--space-2);
 }
+
+.agent-bar {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-3) var(--space-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+.agent-bar::-webkit-scrollbar { display: none; }
+
+.agent-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--color-text-2);
+  font-family: var(--font-body);
+  transition: border-color var(--duration-fast) var(--ease-out),
+              background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+}
+.agent-chip:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.agent-chip.active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 500;
+}
+.agent-chip-icon { font-size: 13px; line-height: 1; }
+.agent-chip-name { max-width: 64px; overflow: hidden; text-overflow: ellipsis; }
 
 .empty-list {
   text-align: center;
