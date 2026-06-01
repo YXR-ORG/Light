@@ -4,7 +4,7 @@ import {storage} from '../models';
 
 export function DeleteSkill(arg1:string):Promise<void>;
 
-export function ImportSkillZip(arg1:Array<number>):Promise<Array<storage.Skill>>;
+export function ImportSkillZip(arg1:Array<number>,arg2:string):Promise<Array<storage.Skill>>;
 
 export function ListSkills():Promise<Array<storage.Skill>>;
 

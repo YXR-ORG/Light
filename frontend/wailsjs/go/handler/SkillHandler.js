@@ -6,8 +6,8 @@ export function DeleteSkill(arg1) {
   return window['go']['handler']['SkillHandler']['DeleteSkill'](arg1);
 }
 
-export function ImportSkillZip(arg1) {
-  return window['go']['handler']['SkillHandler']['ImportSkillZip'](arg1);
+export function ImportSkillZip(arg1, arg2) {
+  return window['go']['handler']['SkillHandler']['ImportSkillZip'](arg1, arg2);
 }
 
 export function ListSkills() {

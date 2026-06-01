@@ -223,7 +223,7 @@ async function handleSkillZipUpload(e: Event) {
   try {
     const buf = await file.arrayBuffer()
     const bytes = Array.from(new Uint8Array(buf))
-    const imported = await ImportSkillZip(bytes)
+    const imported = await ImportSkillZip(bytes, file.name)
     await loadSkills()
     skillImportError.value = `成功导入 ${imported.length} 个技能`
   } catch (e: any) {
