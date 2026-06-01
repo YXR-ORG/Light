@@ -140,6 +140,19 @@ function onClickOutside(e: MouseEvent) {
     showSkills.value = false
     showModelPicker.value = false
     showSkillPicker.value = false
+    return
+  }
+  // 点击 input-area 内部但在 skill-picker 外部时关闭 skill-picker
+  const skillPicker = document.querySelector('.skill-picker')
+  const skillBtn = document.querySelector('.btn-skill-picker')
+  if (showSkillPicker.value && skillPicker && !skillPicker.contains(e.target as Node) && !skillBtn?.contains(e.target as Node)) {
+    showSkillPicker.value = false
+  }
+  // 同理 model-picker
+  const modelPicker = document.querySelector('.model-picker')
+  const modelBtn = document.querySelector('.btn-model')
+  if (showModelPicker.value && modelPicker && !modelPicker.contains(e.target as Node) && !modelBtn?.contains(e.target as Node)) {
+    showModelPicker.value = false
   }
 }
 
@@ -271,7 +284,10 @@ function onKeydown(e: KeyboardEvent) {
     <!-- 技能选择面板 -->
     <transition name="slide-up">
       <div v-if="showSkillPicker" class="skill-picker">
-        <div class="skill-picker-header">选择技能 <span class="skill-picker-hint">多选，LLM 自动调用</span></div>
+        <div class="skill-picker-header">
+          <span class="skill-picker-title">选择技能</span>
+          <span class="skill-picker-hint">多选，LLM 自动调用</span>
+        </div>
         <div v-if="availableSkills.length === 0" class="model-empty">
           请先在「设置 → Skills 广场」中导入技能
         </div>
@@ -283,13 +299,14 @@ function onKeydown(e: KeyboardEvent) {
             :class="{ active: selectedSkillIDs.includes(s.id) }"
             @click="toggleSkillID(s.id)"
           >
-            <span class="skill-picker-check">
-              <svg v-if="selectedSkillIDs.includes(s.id)" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
-            </span>
+            <span class="skill-picker-icon">🔧</span>
             <div class="skill-picker-info">
               <span class="skill-picker-name">{{ s.name }}</span>
               <span class="skill-picker-desc">{{ s.description }}</span>
             </div>
+            <span v-if="selectedSkillIDs.includes(s.id)" class="skill-picker-check">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
           </button>
         </div>
         <div v-if="selectedSkillIDs.length > 0" class="skill-picker-footer">
