@@ -180,16 +180,29 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 	// Load MCP tools + selected skill tools + web search, bind to model
 	allTools := h.loadMCPTools(ctx)
 	if req.WebSearch {
-		tavilyKey, _ := storage.GetSetting("tavily_api_key")
-		slog.Info("WebSearch enabled", "has_key", tavilyKey != "", "key_prefix", func() string {
-			if len(tavilyKey) > 8 { return tavilyKey[:8] + "..." }
-			return tavilyKey
-		}())
-		if tavilyKey == "" {
-			runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true, Error: "请先在设置中配置 Tavily API Key"})
-			return fmt.Errorf("tavily api key not configured")
+		engine, _ := storage.GetSetting("search_engine") // tavily|exa|brave|searxng
+		if engine == "" {
+			engine = "tavily"
 		}
-		allTools = append(allTools, eino.NewWebSearchTool(tavilyKey, 5))
+		var apiKey string
+		switch engine {
+		case "exa":
+			apiKey, _ = storage.GetSetting("exa_api_key")
+		case "brave":
+			apiKey, _ = storage.GetSetting("brave_api_key")
+		case "searxng":
+			apiKey, _ = storage.GetSetting("searxng_url") // holds instance URL
+		default:
+			apiKey, _ = storage.GetSetting("tavily_api_key")
+			engine = "tavily"
+		}
+		if apiKey == "" && engine != "searxng" {
+			runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true,
+				Error: fmt.Sprintf("请先在设置中配置 %s 的 API Key", engine)})
+			return fmt.Errorf("%s api key not configured", engine)
+		}
+		slog.Info("WebSearch enabled", "engine", engine, "has_key", apiKey != "")
+		allTools = append(allTools, eino.NewWebSearchTool(engine, apiKey, 5))
 	}
 	if len(req.SkillIDs) > 0 {
 		for _, sid := range req.SkillIDs {

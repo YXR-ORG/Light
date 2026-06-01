@@ -234,14 +234,34 @@ async function handleSkillZipUpload(e: Event) {
   }
 }
 
-// ── 通用设置 ──
-const tavilyKey = ref('')
-const tavilyKeySaved = ref(false)
+// ── 联网搜索 ──
+const searchEngines = [
+  { value: 'tavily',  label: 'Tavily' },
+  { value: 'exa',     label: 'Exa' },
+  { value: 'brave',   label: 'Brave' },
+  { value: 'searxng', label: 'SearXNG' },
+]
+const searchEngine = ref('tavily')
+const searchKeys = ref({ tavily: '', exa: '', brave: '', searxng: '' })
+const searchKeySaved = ref(false)
+
+async function selectEngine(engine: string) {
+  searchEngine.value = engine
+  await SetSetting('search_engine', engine)
+}
+
+async function saveSearchKey() {
+  const engine = searchEngine.value
+  const key = searchKeys.value[engine as keyof typeof searchKeys.value]
+  const settingKey = engine === 'searxng' ? 'searxng_url' : `${engine}_api_key`
+  await SetSetting(settingKey, key)
+  searchKeySaved.value = true
+  setTimeout(() => { searchKeySaved.value = false }, 2000)
+}
 
 async function saveTavilyKey() {
-  await SetSetting('tavily_api_key', tavilyKey.value)
-  tavilyKeySaved.value = true
-  setTimeout(() => { tavilyKeySaved.value = false }, 2000)
+  searchEngine.value = 'tavily'
+  await saveSearchKey()
 }
 
 // ── WebDAV 备份 ──
@@ -286,8 +306,16 @@ function cancelConfirm() {
 }
 
 onMounted(async () => {
-  tavilyKey.value = await GetSetting('tavily_api_key').catch(() => '')
-  const cfg = await GetConfig().catch(() => null)
+  const [engine, tavily, exa, brave, searxng, cfg] = await Promise.all([
+    GetSetting('search_engine').catch(() => ''),
+    GetSetting('tavily_api_key').catch(() => ''),
+    GetSetting('exa_api_key').catch(() => ''),
+    GetSetting('brave_api_key').catch(() => ''),
+    GetSetting('searxng_url').catch(() => ''),
+    GetConfig().catch(() => null),
+  ])
+  searchEngine.value = engine || 'tavily'
+  searchKeys.value = { tavily, exa, brave, searxng }
   if (cfg) {
     webdavURL.value = cfg.url || ''
     webdavUsername.value = cfg.username || ''
@@ -408,18 +436,80 @@ function formatSize(bytes: number): string {
             <div v-if="mainTab === 'general'" class="general-panel">
               <div class="setting-section">
                 <div class="setting-section-title">联网搜索</div>
-                <div class="setting-section-desc">开启联网搜索后，AI 可在对话中自动调用 Tavily 搜索获取最新信息。</div>
+                <div class="setting-section-desc">开启联网搜索后，AI 可在对话中自动调用搜索工具获取最新信息。</div>
+
+                <!-- 引擎选择 -->
                 <div class="field" style="margin-top:var(--space-3)">
-                  <label>Tavily API Key
-                    <a href="https://app.tavily.com" target="_blank" class="setting-link">申请免费 Key →</a>
-                  </label>
-                  <div style="display:flex;gap:var(--space-2)">
-                    <input v-model="tavilyKey" type="password" placeholder="tvly-..." autocomplete="off" style="flex:1" />
-                    <button class="btn btn-primary" @click="saveTavilyKey" style="white-space:nowrap">
-                      {{ tavilyKeySaved ? '已保存 ✓' : '保存' }}
+                  <label>搜索引擎</label>
+                  <div class="engine-tabs">
+                    <button v-for="e in searchEngines" :key="e.value"
+                      class="engine-tab" :class="{ active: searchEngine === e.value }"
+                      @click="selectEngine(e.value)">
+                      {{ e.label }}
                     </button>
                   </div>
                 </div>
+
+                <!-- Tavily -->
+                <template v-if="searchEngine === 'tavily'">
+                  <div class="field">
+                    <label>Tavily API Key
+                      <a href="https://app.tavily.com" target="_blank" class="setting-link">申请免费 Key →</a>
+                    </label>
+                    <div style="display:flex;gap:var(--space-2)">
+                      <input v-model="searchKeys.tavily" type="password" placeholder="tvly-..." autocomplete="off" style="flex:1" />
+                      <button class="btn btn-primary" @click="saveSearchKey" style="white-space:nowrap">
+                        {{ searchKeySaved ? '已保存 ✓' : '保存' }}
+                      </button>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- Exa -->
+                <template v-else-if="searchEngine === 'exa'">
+                  <div class="field">
+                    <label>Exa API Key
+                      <a href="https://dashboard.exa.ai" target="_blank" class="setting-link">申请 Key →</a>
+                    </label>
+                    <div style="display:flex;gap:var(--space-2)">
+                      <input v-model="searchKeys.exa" type="password" placeholder="exa-..." autocomplete="off" style="flex:1" />
+                      <button class="btn btn-primary" @click="saveSearchKey" style="white-space:nowrap">
+                        {{ searchKeySaved ? '已保存 ✓' : '保存' }}
+                      </button>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- Brave -->
+                <template v-else-if="searchEngine === 'brave'">
+                  <div class="field">
+                    <label>Brave Search API Key
+                      <a href="https://api.search.brave.com/app/keys" target="_blank" class="setting-link">申请 Key →</a>
+                    </label>
+                    <div style="display:flex;gap:var(--space-2)">
+                      <input v-model="searchKeys.brave" type="password" placeholder="BSA..." autocomplete="off" style="flex:1" />
+                      <button class="btn btn-primary" @click="saveSearchKey" style="white-space:nowrap">
+                        {{ searchKeySaved ? '已保存 ✓' : '保存' }}
+                      </button>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- SearXNG -->
+                <template v-else-if="searchEngine === 'searxng'">
+                  <div class="field">
+                    <label>SearXNG 实例地址
+                      <a href="https://searx.space" target="_blank" class="setting-link">公共实例列表 →</a>
+                    </label>
+                    <div style="display:flex;gap:var(--space-2)">
+                      <input v-model="searchKeys.searxng" type="text" placeholder="https://searx.be" autocomplete="off" style="flex:1" />
+                      <button class="btn btn-primary" @click="saveSearchKey" style="white-space:nowrap">
+                        {{ searchKeySaved ? '已保存 ✓' : '保存' }}
+                      </button>
+                    </div>
+                    <div class="field-hint">无需 API Key，填写可用的 SearXNG 实例地址即可</div>
+                  </div>
+                </template>
               </div>
 
               <div class="setting-section">
@@ -865,6 +955,22 @@ function formatSize(bytes: number): string {
 .setting-section-desc { font-size: var(--text-xs); color: var(--color-text-3); line-height: 1.6; }
 .setting-link { font-size: var(--text-xs); color: var(--color-accent); text-decoration: none; margin-left: var(--space-2); }
 .setting-link:hover { text-decoration: underline; }
+
+.engine-tabs { display: flex; gap: var(--space-1); flex-wrap: wrap; margin-top: var(--space-1); }
+.engine-tab {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  font-size: var(--text-xs);
+  color: var(--color-text-2);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+.engine-tab:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.engine-tab.active { border-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-accent); font-weight: 600; }
+
+.field-hint { font-size: var(--text-xs); color: var(--color-text-3); margin-top: var(--space-1); }
 
 .webdav-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .backup-msg { font-size: var(--text-xs); color: var(--color-success); }
