@@ -68,7 +68,7 @@ func DeleteConversation(id string) error {
 	})
 }
 
-func SaveMessage(convID, role, content, thinking, toolCalls, toolResult string, attachments ...string) (*Message, error) {
+func SaveMessage(convID, role, content, thinking, toolCalls, toolResult, agentID, mcpServerIDs string, attachments ...string) (*Message, error) {
 	m := &Message{
 		ID:             NewID(),
 		ConversationID: convID,
@@ -77,6 +77,8 @@ func SaveMessage(convID, role, content, thinking, toolCalls, toolResult string, 
 		Thinking:       thinking,
 		ToolCalls:      toolCalls,
 		ToolResult:     toolResult,
+		AgentID:        agentID,
+		MCPServerIDs:   mcpServerIDs,
 	}
 	if len(attachments) > 0 {
 		m.Attachments = attachments[0]

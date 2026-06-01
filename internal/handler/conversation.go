@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"light-ai/internal/storage"
 )
 
@@ -39,6 +40,15 @@ func (h *ConversationHandler) Delete(id string) error {
 
 func (h *ConversationHandler) SetSystemPrompt(id, prompt string) error {
 	return storage.UpdateSystemPrompt(id, prompt)
+}
+
+// SetAgent 设置对话的智能体（更新 system_prompt + agent_id）
+func (h *ConversationHandler) SetAgent(convID, agentID string) error {
+	agent, err := storage.GetAgent(agentID)
+	if err != nil {
+		return fmt.Errorf("agent not found: %w", err)
+	}
+	return storage.SetAgent(convID, agentID, agent.SystemPrompt)
 }
 
 func (h *ConversationHandler) SetModel(id, provider, model string) error {

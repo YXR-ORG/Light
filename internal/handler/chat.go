@@ -50,6 +50,8 @@ type SendMessageRequest struct {
 	Content         string       `json:"content"`
 	Provider        string       `json:"provider"`
 	Model           string       `json:"model"`
+	AgentID         string       `json:"agent_id"`
+	MCPServerIDs    []string     `json:"mcp_server_ids"`
 	SkillIDs        []string     `json:"skill_ids"`
 	WebSearch       bool         `json:"web_search"`
 	IgnoreContext   bool         `json:"ignore_context"`
@@ -93,6 +95,31 @@ func (h *ChatHandler) loadMCPTools(ctx context.Context) []tool.BaseTool {
 		}
 		tools := h.connectAndGetTools(ctx, srv)
 		allTools = append(allTools, tools...)
+	}
+	return allTools
+}
+
+// loadSelectedMCPTools 只加载 selectedIDs 中指定的 MCP 服务器工具。
+// 若 selectedIDs 为空，不加载任何 MCP 工具。
+func (h *ChatHandler) loadSelectedMCPTools(ctx context.Context, selectedIDs []string) []tool.BaseTool {
+	if len(selectedIDs) == 0 {
+		return nil
+	}
+	servers, err := storage.ListMCPServers()
+	if err != nil {
+		slog.Warn("loadSelectedMCPTools: list servers failed", "error", err)
+		return nil
+	}
+	idSet := make(map[string]bool, len(selectedIDs))
+	for _, id := range selectedIDs {
+		idSet[id] = true
+	}
+	var allTools []tool.BaseTool
+	for _, srv := range servers {
+		if !srv.Enabled || !idSet[srv.ID] {
+			continue
+		}
+		allTools = append(allTools, h.connectAndGetTools(ctx, srv)...)
 	}
 	return allTools
 }
@@ -178,7 +205,7 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 	}
 
 	// Load MCP tools + selected skill tools + web search, bind to model
-	allTools := h.loadMCPTools(ctx)
+	allTools := h.loadSelectedMCPTools(ctx, req.MCPServerIDs)
 	if req.WebSearch {
 		engine, _ := storage.GetSetting("search_engine") // tavily|exa|brave|searxng
 		if engine == "" {
@@ -237,7 +264,8 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 		}
 	}
 
-	if _, err := storage.SaveMessage(req.ConversationID, "user", req.Content, "", "", attachmentsMeta); err != nil {		slog.Error("StreamChat save user message failed", "error", err)
+	mcpJSON, _ := json.Marshal(req.MCPServerIDs)
+	if _, err := storage.SaveMessage(req.ConversationID, "user", req.Content, "", "", "", req.AgentID, string(mcpJSON), attachmentsMeta); err != nil {		slog.Error("StreamChat save user message failed", "error", err)
 	}
 
 	// Check if this is the first user message (for auto title generation)
@@ -305,7 +333,7 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 
 	fullContent, fullThinking := h.runToolLoop(ctx, einoMsgs)
 
-	if _, err := storage.SaveMessage(req.ConversationID, "assistant", fullContent, fullThinking, "", ""); err != nil {
+	if _, err := storage.SaveMessage(req.ConversationID, "assistant", fullContent, fullThinking, "", "", "", ""); err != nil {
 		slog.Error("StreamChat save assistant message failed", "error", err)
 	}
 
