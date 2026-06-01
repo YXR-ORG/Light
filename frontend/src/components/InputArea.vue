@@ -6,15 +6,16 @@ import { Get } from '../../wailsjs/go/handler/SettingsHandler'
 import { SetModel } from '../../wailsjs/go/handler/ConversationHandler'
 import { ListEnabledModels, ListProviders } from '../../wailsjs/go/handler/ProviderHandler'
 import { ListSkills } from '../../wailsjs/go/handler/SkillHandler'
-import SkillsPanel from './SkillsPanel.vue'
+import { List as ListMCPServers } from '../../wailsjs/go/handler/MCPHandler'
 import { handler as handlerModels, type storage } from '../../wailsjs/go/models'
 
 const store = useChatStore()
 const input = ref('')
-const showSkills = ref(false)
 const showModelPicker = ref(false)
 const showSkillPicker = ref(false)
+const showMCPPicker = ref(false)
 const selectedSkillIDs = ref<string[]>([])
+const selectedMCPIDs = ref<string[]>([])
 const webSearch = ref(false)
 const ignoreContext = computed(() => store.contextCutoffId !== null)
 
@@ -70,9 +71,28 @@ function toggleSkillID(id: string) {
   else selectedSkillIDs.value.push(id)
 }
 
+const availableMCPs = ref<storage.MCPServer[]>([])
+
+async function loadMCPs() {
+  availableMCPs.value = await ListMCPServers().catch(() => [])
+}
+
+function toggleMCPID(id: string) {
+  const idx = selectedMCPIDs.value.indexOf(id)
+  if (idx >= 0) selectedMCPIDs.value.splice(idx, 1)
+  else selectedMCPIDs.value.push(id)
+}
+
+function toggleMCPPicker() {
+  showMCPPicker.value = !showMCPPicker.value
+  showModelPicker.value = false
+  showSkillPicker.value = false
+  if (showMCPPicker.value) loadMCPs()
+}
+
 function toggleSkillPicker() {
   showSkillPicker.value = !showSkillPicker.value
-  showSkills.value = false
+  showMCPPicker.value = false
   showModelPicker.value = false
   if (showSkillPicker.value) loadSkills()
 }
@@ -127,19 +147,19 @@ async function selectModel(provider: storage.LLMProvider, modelName: string) {
   await SetModel(store.currentConvId, provider.type, modelName).catch(console.error)
 }
 
-function toggleSkills() { showSkills.value = !showSkills.value; showModelPicker.value = false }
 function toggleModelPicker() {
   showModelPicker.value = !showModelPicker.value
-  showSkills.value = false
+  showSkillPicker.value = false
+  showMCPPicker.value = false
   if (showModelPicker.value) loadEnabledModels()
 }
 
 function onClickOutside(e: MouseEvent) {
   const el = document.querySelector('.input-area')
   if (el && !el.contains(e.target as Node)) {
-    showSkills.value = false
     showModelPicker.value = false
     showSkillPicker.value = false
+    showMCPPicker.value = false
     return
   }
   // 点击 input-area 内部但在 skill-picker 外部时关闭 skill-picker
@@ -153,6 +173,12 @@ function onClickOutside(e: MouseEvent) {
   const modelBtn = document.querySelector('.btn-model')
   if (showModelPicker.value && modelPicker && !modelPicker.contains(e.target as Node) && !modelBtn?.contains(e.target as Node)) {
     showModelPicker.value = false
+  }
+  // MCP picker
+  const mcpPicker = document.querySelector('.mcp-picker')
+  const mcpBtn = document.querySelector('.btn-mcp-picker')
+  if (showMCPPicker.value && mcpPicker && !mcpPicker.contains(e.target as Node) && !mcpBtn?.contains(e.target as Node)) {
+    showMCPPicker.value = false
   }
 }
 
@@ -187,9 +213,9 @@ async function send() {
   }
 
   input.value = ''
-  showSkills.value = false
   showModelPicker.value = false
   showSkillPicker.value = false
+  showMCPPicker.value = false
   const sentAttachments = [...attachments.value]
   attachments.value = []
   store.resetStream()
@@ -222,6 +248,8 @@ async function send() {
       content: text,
       provider,
       model: currentModel.value || 'gpt-4o',
+      agent_id: store.activeAgentId ?? '',
+      mcp_server_ids: selectedMCPIDs.value,
       skill_ids: selectedSkillIDs.value,
       web_search: webSearch.value,
       ignore_context: false,
@@ -255,13 +283,6 @@ function onKeydown(e: KeyboardEvent) {
 
 <template>
   <div class="input-area">
-    <!-- Skills 面板 -->
-    <transition name="slide-up">
-      <div v-if="showSkills" class="popup-panel">
-        <SkillsPanel />
-      </div>
-    </transition>
-
     <!-- 模型选择面板 -->
     <transition name="slide-up">
       <div v-if="showModelPicker" class="model-picker">
@@ -315,6 +336,40 @@ function onKeydown(e: KeyboardEvent) {
       </div>
     </transition>
 
+    <!-- MCP 选择面板 -->
+    <transition name="slide-up">
+      <div v-if="showMCPPicker" class="mcp-picker">
+        <div class="mcp-picker-header">
+          <span class="mcp-picker-title">选择 MCP 工具</span>
+          <span class="mcp-picker-hint">多选，发送时启用</span>
+        </div>
+        <div v-if="availableMCPs.filter(m => m.enabled).length === 0" class="model-empty">
+          请先在「设置 → MCP」中添加并启用 MCP 服务器
+        </div>
+        <div v-else class="mcp-picker-list">
+          <button
+            v-for="m in availableMCPs.filter(s => s.enabled)"
+            :key="m.id"
+            class="mcp-picker-item"
+            :class="{ active: selectedMCPIDs.includes(m.id) }"
+            @click="toggleMCPID(m.id)"
+          >
+            <span class="mcp-picker-type">{{ m.type.toUpperCase() }}</span>
+            <div class="mcp-picker-info">
+              <span class="mcp-picker-name">{{ m.name }}</span>
+              <span class="mcp-picker-addr">{{ m.type === 'sse' ? m.url : m.command }}</span>
+            </div>
+            <span v-if="selectedMCPIDs.includes(m.id)" class="mcp-picker-check">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </button>
+        </div>
+        <div v-if="selectedMCPIDs.length > 0" class="mcp-picker-footer">
+          <button class="skill-clear-btn" @click="selectedMCPIDs = []">清除选择</button>
+        </div>
+      </div>
+    </transition>
+
     <!-- 附件预览区 -->
     <div v-if="attachments.length > 0" class="attachment-preview">
       <div v-for="(a, idx) in attachments" :key="idx" class="attachment-chip">
@@ -349,17 +404,11 @@ function onKeydown(e: KeyboardEvent) {
         placeholder="输入消息..."
         :disabled="store.streaming"
         @keydown="onKeydown"
-        @focus="showSkills = false; showModelPicker = false"
+        @focus="showModelPicker = false"
         rows="1"
         class="has-attach-btn"
       />
       <div class="input-actions">
-        <!-- 技能按钮 -->
-        <button class="btn-icon" :class="{ 'btn-icon--active': showSkills }" @click="toggleSkills" title="技能">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-          </svg>
-        </button>
         <!-- 忽略上下文按钮 -->
         <button
           class="btn-ignore-ctx"
@@ -390,6 +439,15 @@ function onKeydown(e: KeyboardEvent) {
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
           <span v-if="selectedSkillIDs.length > 0" class="skill-count">{{ selectedSkillIDs.length }}</span>
         </button>
+        <!-- MCP 选择按钮 -->
+        <button class="btn-mcp-picker" :class="{ active: showMCPPicker || selectedMCPIDs.length > 0 }" @click="toggleMCPPicker" title="选择 MCP 工具">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+          <span v-if="selectedMCPIDs.length > 0" class="mcp-count">{{ selectedMCPIDs.length }}</span>
+        </button>
         <!-- 模型选择按钮 -->
         <button class="btn-model" :class="{ 'btn-model--active': showModelPicker }" @click="toggleModelPicker" title="切换模型">
           <span>{{ modelLabel }}</span>
@@ -413,15 +471,6 @@ function onKeydown(e: KeyboardEvent) {
 .input-area {
   padding: 0 var(--space-6) var(--space-5);
   position: relative;
-}
-
-.popup-panel {
-  position: absolute;
-  bottom: calc(100% - var(--space-5));
-  left: var(--space-6);
-  right: var(--space-6);
-  z-index: 100;
-  margin-bottom: var(--space-2);
 }
 
 .model-picker {
@@ -556,6 +605,80 @@ function onKeydown(e: KeyboardEvent) {
 .skill-picker-footer { padding: var(--space-2) var(--space-3); border-top: 1px solid var(--color-border); }
 .skill-clear-btn { font-size: var(--text-xs); color: var(--color-text-3); background: none; border: none; cursor: pointer; padding: 0; }
 .skill-clear-btn:hover { color: var(--color-danger); }
+
+.btn-mcp-picker {
+  display: flex; align-items: center; gap: 3px;
+  height: 28px; padding: 0 var(--space-2);
+  border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  background: transparent; cursor: pointer;
+  color: var(--color-text-3);
+  transition: border-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out),
+              background var(--duration-fast) var(--ease-out);
+}
+.btn-mcp-picker:hover, .btn-mcp-picker.active {
+  border-color: var(--color-accent); color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.mcp-count {
+  font-size: 10px; font-weight: 700;
+  background: var(--color-accent); color: #fff;
+  border-radius: var(--radius-full); padding: 0 4px;
+  min-width: 14px; text-align: center;
+}
+
+.mcp-picker {
+  position: absolute;
+  bottom: calc(100% - var(--space-5));
+  right: calc(var(--space-6) + 100px);
+  z-index: 100;
+  margin-bottom: var(--space-2);
+  width: 240px;
+  background: var(--color-paper);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.mcp-picker-header {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs); font-weight: 600; color: var(--color-text-2);
+  background: var(--color-paper-2); border-bottom: 1px solid var(--color-border);
+  display: flex; align-items: baseline; gap: var(--space-2);
+}
+.mcp-picker-hint { font-weight: 400; color: var(--color-text-3); }
+.mcp-picker-list {
+  max-height: 240px; overflow-y: auto;
+  padding: var(--space-1); display: flex; flex-direction: column; gap: 2px;
+}
+.mcp-picker-item {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2); border: none; border-radius: var(--radius-sm);
+  background: transparent; cursor: pointer; text-align: left; width: 100%;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.mcp-picker-item:hover { background: var(--color-paper-3); }
+.mcp-picker-item.active { background: var(--color-accent-soft); }
+.mcp-picker-type {
+  font-size: 10px; font-weight: 700; padding: 1px 5px;
+  background: var(--color-accent-soft); color: var(--color-accent);
+  border-radius: var(--radius-sm); flex-shrink: 0;
+}
+.mcp-picker-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.mcp-picker-name { font-size: var(--text-xs); font-weight: 500; color: var(--color-text); }
+.mcp-picker-addr {
+  font-size: 10px; color: var(--color-text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mcp-picker-check {
+  width: 16px; height: 16px; border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); display: flex; align-items: center;
+  justify-content: center; flex-shrink: 0; color: var(--color-accent);
+}
+.mcp-picker-item.active .mcp-picker-check {
+  background: var(--color-accent); border-color: var(--color-accent); color: #fff;
+}
+.mcp-picker-footer { padding: var(--space-2) var(--space-3); border-top: 1px solid var(--color-border); }
 
 .model-empty {
   font-size: var(--text-xs);
