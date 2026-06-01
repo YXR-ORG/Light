@@ -45,6 +45,16 @@ func UpdateSystemPrompt(id, prompt string) error {
 		Updates(map[string]any{"system_prompt": prompt, "updated_at": time.Now()}).Error
 }
 
+// SetAgent 更新对话的智能体 ID 和 system_prompt
+func SetAgent(convID, agentID, systemPrompt string) error {
+	return DB.Model(&Conversation{}).Where("id = ?", convID).
+		Updates(map[string]any{
+			"agent_id":      agentID,
+			"system_prompt": systemPrompt,
+			"updated_at":    time.Now(),
+		}).Error
+}
+
 func UpdateConversationModel(id, provider, model string) error {
 	return DB.Model(&Conversation{}).Where("id = ?", id).
 		Updates(map[string]any{"provider": provider, "model": model, "updated_at": time.Now()}).Error

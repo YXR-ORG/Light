@@ -14,6 +14,8 @@ type Conversation struct {
 	Provider     string    `gorm:"size:32;not null" json:"provider"`
 	Model        string    `gorm:"size:64;not null" json:"model"`
 	SystemPrompt string    `gorm:"type:text;default:''" json:"system_prompt"`
+	AgentID      string    `gorm:"size:36;default:''" json:"agent_id"`
+	MCPServerIDs string    `gorm:"type:text;default:''" json:"mcp_server_ids"` // JSON []string
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -27,6 +29,8 @@ type Message struct {
 	ToolCalls      string    `gorm:"type:text" json:"tool_calls,omitempty"`
 	ToolResult     string    `gorm:"type:text" json:"tool_result,omitempty"`
 	Attachments    string    `gorm:"type:text" json:"attachments,omitempty"` // JSON metadata only
+	AgentID        string    `gorm:"size:36;default:''" json:"agent_id"`
+	MCPServerIDs   string    `gorm:"type:text;default:''" json:"mcp_server_ids"` // JSON []string snapshot
 	CreatedAt      time.Time `json:"created_at"`
 }
 

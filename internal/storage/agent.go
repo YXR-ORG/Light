@@ -28,6 +28,11 @@ func ListAgents() ([]Agent, error) {
 	return list, err
 }
 
+func GetAgent(id string) (*Agent, error) {
+	var a Agent
+	return &a, DB.First(&a, "id = ?", id).Error
+}
+
 func SaveAgent(a *Agent) error {
 	if a.ID == "" {
 		a.ID = NewID()
