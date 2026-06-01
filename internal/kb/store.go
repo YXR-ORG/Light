@@ -251,19 +251,93 @@ func (s *Store) DeleteDocumentChunks(docID string) error {
 	return tx.Commit()
 }
 
+// buildFTS5Query 把自然语言查询转为 FTS5 短语查询。
+//
+// unicode61 tokenizer 把连续汉字作为整体 token（如"张嘎"是一个 token），
+// 不带引号的多字词查询会被解析为 AND（单字），导致搜不到。
+// 解决方案：把每个空格分隔的词用双引号包裹，用 OR 连接。
+// 例："张嘎 公平国" → "张嘎" OR "公平国"
+func buildFTS5Query(query string) string {
+	// 转义 FTS5 特殊字符（双引号内不需要转义其他字符）
+	parts := strings.Fields(query)
+	if len(parts) == 0 {
+		return ""
+	}
+	quoted := make([]string, 0, len(parts))
+	for _, p := range parts {
+		// 跳过空词，转义词内的双引号
+		p = strings.ReplaceAll(p, `"`, `""`)
+		if p != "" {
+			quoted = append(quoted, `"`+p+`"`)
+		}
+	}
+	if len(quoted) == 0 {
+		return ""
+	}
+	// 同时做 AND 查询（所有词都要出现）和 OR 查询（任一词出现），取 AND 优先
+	// 简单策略：先尝试 AND，如果结果为 0 再 OR（在调用层处理）
+	// 这里返回 OR 查询，保证召回率
+	return strings.Join(quoted, " OR ")
+}
+
 // Search 用 FTS5 检索，返回最多 topK 条结果
 func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 	if topK <= 0 || topK > 10 {
 		topK = 5
 	}
+
+	ftsQuery := buildFTS5Query(query)
+	if ftsQuery == "" {
+		return nil, nil
+	}
+
+	// 先尝试 AND 查询（所有词都出现，精度高）
+	andParts := strings.Fields(query)
+	andQuoted := make([]string, 0, len(andParts))
+	for _, p := range andParts {
+		p = strings.ReplaceAll(p, `"`, `""`)
+		if p != "" {
+			andQuoted = append(andQuoted, `"`+p+`"`)
+		}
+	}
+	andQuery := strings.Join(andQuoted, " ")
+
+	results, err := s.doSearch(andQuery, topK)
+	if err != nil {
+		slog.Warn("kbstore: AND search failed, fallback to OR", "error", err)
+	}
+	// 如果 AND 查询结果不足，补充 OR 查询
+	if len(results) < topK {
+		orResults, err2 := s.doSearch(ftsQuery, topK)
+		if err2 == nil {
+			// 合并去重
+			seen := make(map[string]bool)
+			for _, r := range results {
+				seen[r.Content] = true
+			}
+			for _, r := range orResults {
+				if !seen[r.Content] {
+					results = append(results, r)
+					if len(results) >= topK {
+						break
+					}
+				}
+			}
+		}
+	}
+
+	slog.Info("kbstore: search", "query", query, "fts_and", andQuery, "fts_or", ftsQuery, "results", len(results))
+	return results, nil
+}
+
+func (s *Store) doSearch(ftsQuery string, topK int) ([]SearchResult, error) {
 	rows, err := s.db.Query(`
 SELECT content, chunk_index, doc_name
 FROM chunks_fts
 WHERE chunks_fts MATCH ?
 ORDER BY rank
-LIMIT ?`, query, topK)
+LIMIT ?`, ftsQuery, topK)
 	if err != nil {
-		slog.Warn("kbstore: fts5 search failed", "query", query, "error", err)
 		return nil, fmt.Errorf("fts5 search failed: %w", err)
 	}
 	defer rows.Close()
@@ -276,7 +350,6 @@ LIMIT ?`, query, topK)
 		}
 		results = append(results, r)
 	}
-	slog.Info("kbstore: search", "query", query, "results", len(results))
 	return results, rows.Err()
 }
 
