@@ -71,12 +71,14 @@ func CloseStore(kbID string) {
 }
 
 func (s *Store) migrate() error {
-	// 检测旧版 FTS5 schema（content= 外部表模式），如有则删除重建
+	// 检测需要重建 FTS5 的情况：
+	// 1. 旧版 content= 外部表模式
+	// 2. unicode61 tokenizer（对中文分词不可靠，换成 trigram）
 	var ftsSQL string
 	s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_fts'`).Scan(&ftsSQL)
 	needRebuildFTS := false
-	if ftsSQL != "" && strings.Contains(ftsSQL, "content=") {
-		slog.Info("migrate: detected old FTS5 schema, dropping for rebuild")
+	if ftsSQL != "" && (strings.Contains(ftsSQL, "content=") || strings.Contains(ftsSQL, "unicode61")) {
+		slog.Info("migrate: dropping old FTS5 schema for rebuild", "reason", ftsSQL)
 		s.db.Exec(`DROP TABLE IF EXISTS chunks_fts`)
 		needRebuildFTS = true
 	}
@@ -98,13 +100,15 @@ func (s *Store) migrate() error {
   chunk_index INTEGER NOT NULL,
   created_at  DATETIME
 )`,
-		// FTS5 独立存储模式（不用 content= 外部表，避免事务同步问题）
+		// trigram tokenizer：把每个字符串切成所有3字符子串
+		// 对中文完全可靠，任意子串（人名、地名等）都能被搜到
+		// 代价：索引体积约为 unicode61 的 3-5 倍，但对本地知识库完全可接受
 		`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
   chunk_id UNINDEXED,
   doc_name UNINDEXED,
   chunk_index UNINDEXED,
   content,
-  tokenize='unicode61'
+  tokenize='trigram'
 )`,
 		`CREATE TABLE IF NOT EXISTS vectors (
   id       TEXT PRIMARY KEY,
@@ -251,36 +255,73 @@ func (s *Store) DeleteDocumentChunks(docID string) error {
 	return tx.Commit()
 }
 
-// buildFTS5Query 把自然语言查询转为 FTS5 短语查询。
-//
-// unicode61 tokenizer 把连续汉字作为整体 token（如"张嘎"是一个 token），
-// 不带引号的多字词查询会被解析为 AND（单字），导致搜不到。
-// 解决方案：把每个空格分隔的词用双引号包裹，用 OR 连接。
-// 例："张嘎 公平国" → "张嘎" OR "公平国"
-func buildFTS5Query(query string) string {
-	// 转义 FTS5 特殊字符（双引号内不需要转义其他字符）
+// buildFTS5Query 把自然语言查询转为 trigram FTS5 查询。
+// trigram 要求每个 token 至少 3 个 Unicode 字符。
+// 返回：ftsTerms（>=3字符的词，用于FTS5），shortTerms（<3字符的词，用于LIKE）
+func buildFTS5Query(query string) (andQuery, orQuery string, shortTerms []string) {
 	parts := strings.Fields(query)
 	if len(parts) == 0 {
-		return ""
+		return "", "", nil
 	}
-	quoted := make([]string, 0, len(parts))
+
+	var longParts []string
 	for _, p := range parts {
-		// 跳过空词，转义词内的双引号
 		p = strings.ReplaceAll(p, `"`, `""`)
-		if p != "" {
-			quoted = append(quoted, `"`+p+`"`)
+		if p == "" {
+			continue
+		}
+		if len([]rune(p)) >= 3 {
+			longParts = append(longParts, `"`+p+`"`)
+		} else {
+			shortTerms = append(shortTerms, p)
 		}
 	}
-	if len(quoted) == 0 {
-		return ""
+
+	if len(longParts) > 0 {
+		andQuery = strings.Join(longParts, " ")
+		orQuery = strings.Join(longParts, " OR ")
 	}
-	// 同时做 AND 查询（所有词都要出现）和 OR 查询（任一词出现），取 AND 优先
-	// 简单策略：先尝试 AND，如果结果为 0 再 OR（在调用层处理）
-	// 这里返回 OR 查询，保证召回率
-	return strings.Join(quoted, " OR ")
+	return andQuery, orQuery, shortTerms
 }
 
-// Search 用 FTS5 检索，返回最多 topK 条结果
+// searchByLike 对短词（<3字符，trigram不支持）用 LIKE 查询补充
+func (s *Store) searchByLike(terms []string, topK int) ([]SearchResult, error) {
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	// 构建 WHERE content LIKE '%x%' AND content LIKE '%y%'
+	conditions := make([]string, len(terms))
+	args := make([]interface{}, len(terms)+1)
+	for i, t := range terms {
+		conditions[i] = "content LIKE ?"
+		args[i] = "%" + t + "%"
+	}
+	args[len(terms)] = topK
+	query := fmt.Sprintf(`
+SELECT c.content, c.chunk_index, d.name
+FROM chunks c JOIN documents d ON c.doc_id = d.id
+WHERE %s
+LIMIT ?`, strings.Join(conditions, " AND "))
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		if err := rows.Scan(&r.Content, &r.ChunkIndex, &r.DocName); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// Search 用 trigram FTS5 检索，返回最多 topK 条结果。
+// 先做 AND 查询（精度高），结果不足时补 OR 查询（召回高）。
+// 对 <3字符的短词（如"张嘎"）额外用 LIKE 查询补充。
 func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 	if topK <= 0 {
 		topK = 10
@@ -289,47 +330,51 @@ func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 		topK = 20
 	}
 
-	ftsQuery := buildFTS5Query(query)
-	if ftsQuery == "" {
-		return nil, nil
-	}
+	andQuery, orQuery, shortTerms := buildFTS5Query(query)
 
-	// 先尝试 AND 查询（所有词都出现，精度高）
-	andParts := strings.Fields(query)
-	andQuoted := make([]string, 0, len(andParts))
-	for _, p := range andParts {
-		p = strings.ReplaceAll(p, `"`, `""`)
-		if p != "" {
-			andQuoted = append(andQuoted, `"`+p+`"`)
-		}
-	}
-	andQuery := strings.Join(andQuoted, " ")
+	var results []SearchResult
+	seen := make(map[string]bool)
 
-	results, err := s.doSearch(andQuery, topK)
-	if err != nil {
-		slog.Warn("kbstore: AND search failed, fallback to OR", "error", err)
-	}
-	// 如果 AND 查询结果不足，补充 OR 查询
-	if len(results) < topK {
-		orResults, err2 := s.doSearch(ftsQuery, topK)
-		if err2 == nil {
-			// 合并去重
-			seen := make(map[string]bool)
-			for _, r := range results {
+	addResults := func(newResults []SearchResult) {
+		for _, r := range newResults {
+			if !seen[r.Content] {
 				seen[r.Content] = true
-			}
-			for _, r := range orResults {
-				if !seen[r.Content] {
-					results = append(results, r)
-					if len(results) >= topK {
-						break
-					}
-				}
+				results = append(results, r)
 			}
 		}
 	}
 
-	slog.Info("kbstore: search", "query", query, "fts_and", andQuery, "fts_or", ftsQuery, "results", len(results))
+	// 1. FTS5 AND 查询（长词，精度高）
+	if andQuery != "" {
+		r, err := s.doSearch(andQuery, topK)
+		if err != nil {
+			slog.Warn("kbstore: AND search failed", "error", err)
+		} else {
+			addResults(r)
+		}
+	}
+
+	// 2. FTS5 OR 查询补充（召回不足时）
+	if len(results) < topK && orQuery != "" && orQuery != andQuery {
+		r, _ := s.doSearch(orQuery, topK)
+		addResults(r)
+	}
+
+	// 3. LIKE 查询补充短词（<3字符，trigram 不支持）
+	if len(shortTerms) > 0 {
+		r, err := s.searchByLike(shortTerms, topK)
+		if err != nil {
+			slog.Warn("kbstore: LIKE search failed", "error", err)
+		} else {
+			addResults(r)
+		}
+	}
+
+	if len(results) > topK {
+		results = results[:topK]
+	}
+
+	slog.Info("kbstore: search", "query", query, "results", len(results), "short_terms", shortTerms)
 	return results, nil
 }
 
