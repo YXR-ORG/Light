@@ -215,9 +215,10 @@ CREATE TABLE summaries (
 
 **问题**：关键词检索无法理解语义。"勇敢的少年"和"机智的小鬼"语义相同，但 FTS5 找不到关联。这是当前架构的根本局限。
 
-**方案**：
-1. 用本地 embedding 模型（如 `nomic-embed-text`，通过 Ollama 运行，无需 API Key）把每个 chunk 转成向量
-2. 存入已预留的 `vectors` 表（`embedding BLOB`）
+**方案**：内嵌 `all-MiniLM-L6-v2` ONNX 模型（384 维，约 22MB），通过 `onnxruntime-go` 在本地运行，完全离线，无需 Ollama 或任何外部服务。
+
+1. 模型文件打包进 app bundle（`Contents/Resources/models/all-MiniLM-L6-v2.onnx`）
+2. 文档就绪后，后台异步向量化所有 chunks，写入已预留的 `vectors` 表
 3. 搜索时并行执行 FTS5（关键词）+ 向量相似度（语义）两路检索
 4. 用 **RRF（Reciprocal Rank Fusion）** 合并两路结果，取长补短
 
@@ -227,7 +228,7 @@ CREATE TABLE summaries (
 用户问题 → FTS5 关键词检索 ────────────┘
 ```
 
-**预期效果**：语义相近的内容能被召回，跨文档推理质量大幅提升。`vectors` 表已预留，等 Ollama embedding API 集成后可直接启用。
+**已就绪**：`vectors` 表已预留（`embedding BLOB`），schema 不需要变更。待实现：`onnxruntime-go` 集成 + embedding pipeline + 向量相似度检索。
 
 ---
 
