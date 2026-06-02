@@ -18,12 +18,9 @@ const emit = defineEmits<{
 // ── 右键菜单 ─────────────────────────────────────────────────────────
 const ctxMenu = ref<{ x: number; y: number } | null>(null)
 const ctxRef = ref<HTMLElement | null>(null)
-// 删除二次确认状态
-const confirmDelete = ref(false)
 
 function onContextMenu(e: MouseEvent) {
   e.preventDefault()
-  confirmDelete.value = false
   ctxMenu.value = { x: e.clientX, y: e.clientY }
   nextTick(() => {
     if (ctxRef.value) {
@@ -39,20 +36,6 @@ function onContextMenu(e: MouseEvent) {
 
 function closeCtx() {
   ctxMenu.value = null
-  confirmDelete.value = false
-}
-
-function requestDelete() {
-  // 第一次点删除：展开确认
-  confirmDelete.value = true
-  // 重新挂 close 监听，防止前一个 once 已消耗
-  document.addEventListener('mousedown', closeCtx, { once: true })
-}
-
-function confirmDeleteNow(e: MouseEvent) {
-  e.stopPropagation()
-  closeCtx()
-  emit('delete', props.conv.id)
 }
 
 // ── 重命名（内联编辑）────────────────────────────────────────────────
@@ -79,11 +62,26 @@ function commitRename() {
 function cancelRename() { renaming.value = false }
 
 // ── 其他操作 ─────────────────────────────────────────────────────────
-function onClick() { if (!renaming.value) emit('select', props.conv.id) }
+function onClick() { if (!renaming.value && !pendingDelete.value) emit('select', props.conv.id) }
 
-function onDelete(e: MouseEvent) {
+// 删除：hover 按钮两步确认
+const pendingDelete = ref(false)
+
+function requestDelete(e: MouseEvent) {
   e.stopPropagation()
-  closeCtx()
+  pendingDelete.value = true
+  nextTick(() => {
+    document.addEventListener('mousedown', cancelDelete, { once: true })
+  })
+}
+
+function cancelDelete() {
+  pendingDelete.value = false
+}
+
+function confirmDeleteNow(e: MouseEvent) {
+  e.stopPropagation()
+  pendingDelete.value = false
   emit('delete', props.conv.id)
 }
 
@@ -137,10 +135,23 @@ function escapeHtml(s: string) {
       <div class="conv-meta">{{ conv.provider }} · {{ conv.model }}</div>
     </div>
 
-    <!-- hover 操作区：只有删除 -->
-    <button class="btn-delete" @click.stop="onDelete" title="删除">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-    </button>
+    <!-- hover 操作区：删除（两步确认） -->
+    <div class="conv-actions" @click.stop @mousedown.stop>
+      <template v-if="!pendingDelete">
+        <button class="btn-delete" @click="requestDelete" title="删除">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </template>
+      <template v-else>
+        <span class="confirm-label">删除？</span>
+        <button class="confirm-yes" @click="confirmDeleteNow" title="确认删除">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </button>
+        <button class="confirm-no" @click.stop="cancelDelete" title="取消">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </template>
+    </div>
   </div>
 
   <!-- 右键菜单 -->
@@ -160,22 +171,6 @@ function escapeHtml(s: string) {
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
         {{ conv.starred ? '取消收藏' : '收藏' }}
       </button>
-      <div class="ctx-divider" />
-
-      <!-- 删除：两步确认 -->
-      <template v-if="!confirmDelete">
-        <button class="ctx-item danger" @click.stop="requestDelete">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-          删除
-        </button>
-      </template>
-      <template v-else>
-        <div class="ctx-confirm-label">确认删除？</div>
-        <div class="ctx-confirm-btns">
-          <button class="ctx-confirm-yes" @click="confirmDeleteNow">删除</button>
-          <button class="ctx-confirm-no" @click.stop="confirmDelete = false">取消</button>
-        </div>
-      </template>
     </div>
   </Teleport>
 </template>
@@ -236,20 +231,48 @@ function escapeHtml(s: string) {
   color: var(--color-text); font-family: var(--font-body); outline: none;
 }
 
-/* 删除按钮：hover 才显示 */
-.btn-delete {
+/* hover 操作区 */
+.conv-actions {
   opacity: 0;
   flex-shrink: 0;
+  display: flex; align-items: center; gap: 2px;
+  transition: opacity var(--duration-fast);
+}
+.conv-item:hover .conv-actions { opacity: 1; }
+
+/* 删除按钮（初始态） */
+.btn-delete {
   display: flex; align-items: center; justify-content: center;
   width: 22px; height: 22px;
   border: none; background: transparent;
   color: var(--color-text-3);
   border-radius: var(--radius-sm);
   cursor: pointer; padding: 0;
-  transition: opacity var(--duration-fast), background var(--duration-fast), color var(--duration-fast);
+  transition: background var(--duration-fast), color var(--duration-fast);
 }
-.conv-item:hover .btn-delete { opacity: 1; }
 .btn-delete:hover { background: var(--color-paper-4); color: var(--color-danger); }
+
+/* 二次确认态 */
+.confirm-label {
+  font-size: 11px; color: var(--color-danger);
+  font-weight: 500; white-space: nowrap;
+  padding: 0 2px;
+}
+.confirm-yes, .confirm-no {
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  border: none; border-radius: var(--radius-sm);
+  cursor: pointer; padding: 0;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+.confirm-yes {
+  background: var(--color-danger); color: #fff;
+}
+.confirm-yes:hover { opacity: 0.85; }
+.confirm-no {
+  background: var(--color-paper-3); color: var(--color-text-3);
+}
+.confirm-no:hover { background: var(--color-paper-4); color: var(--color-text); }
 
 .conv-title :deep(mark) {
   background: var(--color-accent-soft);
@@ -280,34 +303,4 @@ function escapeHtml(s: string) {
 .ctx-item:hover { background: var(--color-paper-3); color: var(--color-text); }
 .ctx-item.danger { color: var(--color-danger); }
 .ctx-item.danger:hover { background: oklch(0.96 0.02 25); }
-.ctx-divider { height: 1px; background: var(--color-border); margin: var(--space-1) 0; }
-
-/* 二次确认 */
-.ctx-confirm-label {
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--text-xs);
-  color: var(--color-danger);
-  font-weight: 500;
-}
-.ctx-confirm-btns {
-  display: flex; gap: var(--space-1); padding: 0 var(--space-1) var(--space-1);
-}
-.ctx-confirm-yes {
-  flex: 1; padding: var(--space-1) 0;
-  background: var(--color-danger); color: #fff;
-  border: none; border-radius: var(--radius-md);
-  font-size: var(--text-xs); font-family: var(--font-body);
-  cursor: pointer; font-weight: 500;
-  transition: opacity var(--duration-fast);
-}
-.ctx-confirm-yes:hover { opacity: 0.85; }
-.ctx-confirm-no {
-  flex: 1; padding: var(--space-1) 0;
-  background: var(--color-paper-3); color: var(--color-text-2);
-  border: none; border-radius: var(--radius-md);
-  font-size: var(--text-xs); font-family: var(--font-body);
-  cursor: pointer;
-  transition: background var(--duration-fast);
-}
-.ctx-confirm-no:hover { background: var(--color-paper-4); }
 </style>
