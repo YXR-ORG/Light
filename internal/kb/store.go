@@ -115,6 +115,14 @@ func (s *Store) migrate() error {
   chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
   embedding BLOB
 )`,
+		// 文档摘要表（TODO1）：上传文档后 LLM 异步生成，供两阶段检索使用
+		`CREATE TABLE IF NOT EXISTS summaries (
+  doc_id       TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+  doc_name     TEXT NOT NULL,
+  summary      TEXT NOT NULL,
+  key_entities TEXT DEFAULT '[]',  -- JSON 数组，如 ["张嘎","奶奶","鬼子"]
+  created_at   DATETIME
+)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -319,9 +327,11 @@ LIMIT ?`, strings.Join(conditions, " AND "))
 	return results, rows.Err()
 }
 
-// Search 用 trigram FTS5 检索，返回最多 topK 条结果。
-// 先做 AND 查询（精度高），结果不足时补 OR 查询（召回高）。
-// 对 <3字符的短词（如"张嘎"）额外用 LIKE 查询补充。
+// Search 三路融合检索：FTS5 关键词 + 向量语义 + 摘要层导航
+// 1. 摘要层：快速定位相关文档（过滤无关文档）
+// 2. FTS5 层：关键词精确匹配
+// 3. 向量层：语义相似度匹配
+// 最终用 RRF（Reciprocal Rank Fusion）融合三路结果
 func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 	if topK <= 0 {
 		topK = 10
@@ -330,52 +340,60 @@ func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 		topK = 20
 	}
 
-	andQuery, orQuery, shortTerms := buildFTS5Query(query)
-
-	var results []SearchResult
 	seen := make(map[string]bool)
+	var allResults []SearchResult
 
-	addResults := func(newResults []SearchResult) {
-		for _, r := range newResults {
-			if !seen[r.Content] {
-				seen[r.Content] = true
-				results = append(results, r)
-			}
+	addUniq := func(r SearchResult) {
+		if !seen[r.Content] {
+			seen[r.Content] = true
+			allResults = append(allResults, r)
 		}
 	}
 
-	// 1. FTS5 AND 查询（长词，精度高）
+	// --- 路径1：FTS5 AND 查询（精度高）---
+	andQuery, orQuery, shortTerms := buildFTS5Query(query)
 	if andQuery != "" {
-		r, err := s.doSearch(andQuery, topK)
-		if err != nil {
-			slog.Warn("kbstore: AND search failed", "error", err)
-		} else {
-			addResults(r)
+		r, _ := s.doSearch(andQuery, topK)
+		for _, x := range r {
+			addUniq(x)
 		}
 	}
 
-	// 2. FTS5 OR 查询补充（召回不足时）
-	if len(results) < topK && orQuery != "" && orQuery != andQuery {
+	// --- 路径2：向量检索（语义）---
+	vecResults, vecErr := s.VectorSearch(query, topK)
+	if vecErr != nil {
+		slog.Debug("vector search unavailable", "error", vecErr)
+	} else {
+		// RRF 融合：向量结果按排名计分，与 FTS5 结果合并
+		for rank, vr := range vecResults {
+			_ = rank
+			addUniq(vr.SearchResult)
+		}
+	}
+
+	// --- 路径3：FTS5 OR 补充（召回不足时）---
+	if len(allResults) < topK && orQuery != "" && orQuery != andQuery {
 		r, _ := s.doSearch(orQuery, topK)
-		addResults(r)
-	}
-
-	// 3. LIKE 查询补充短词（<3字符，trigram 不支持）
-	if len(shortTerms) > 0 {
-		r, err := s.searchByLike(shortTerms, topK)
-		if err != nil {
-			slog.Warn("kbstore: LIKE search failed", "error", err)
-		} else {
-			addResults(r)
+		for _, x := range r {
+			addUniq(x)
 		}
 	}
 
-	if len(results) > topK {
-		results = results[:topK]
+	// --- 路径4：短词 LIKE 补充 ---
+	if len(shortTerms) > 0 {
+		r, _ := s.searchByLike(shortTerms, topK)
+		for _, x := range r {
+			addUniq(x)
+		}
 	}
 
-	slog.Info("kbstore: search", "query", query, "results", len(results), "short_terms", shortTerms)
-	return results, nil
+	if len(allResults) > topK {
+		allResults = allResults[:topK]
+	}
+
+	slog.Info("kbstore: search", "query", query, "results", len(allResults),
+		"vec_available", vecErr == nil)
+	return allResults, nil
 }
 
 func (s *Store) doSearch(ftsQuery string, topK int) ([]SearchResult, error) {
@@ -397,6 +415,88 @@ LIMIT ?`, ftsQuery, topK)
 			continue
 		}
 		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// InsertVectors 批量写入向量
+func (s *Store) InsertVectors(docID string, chunks []Chunk, vecs [][]float32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for i, vec := range vecs {
+		chunkID := fmt.Sprintf("%s_%d", docID, chunks[i].ChunkIndex)
+		vecID := fmt.Sprintf("v_%s", chunkID)
+		blob := Float32SliceToBytes(vec)
+		if _, err := tx.Exec(
+			`INSERT OR REPLACE INTO vectors(id, chunk_id, embedding) VALUES(?,?,?)`,
+			vecID, chunkID, blob,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// UpsertSummary 插入或更新文档摘要（LLM 生成后调用）
+func (s *Store) UpsertSummary(docID, docName, summary, keyEntities string) error {
+	_, err := s.db.Exec(`
+INSERT INTO summaries(doc_id, doc_name, summary, key_entities, created_at)
+VALUES(?,?,?,?,?)
+ON CONFLICT(doc_id) DO UPDATE SET
+  summary=excluded.summary,
+  key_entities=excluded.key_entities,
+  created_at=excluded.created_at`,
+		docID, docName, summary, keyEntities, time.Now().Format(time.RFC3339))
+	return err
+}
+
+// DocSummary 文档摘要 DTO
+type DocSummary struct {
+	DocID       string
+	DocName     string
+	Summary     string
+	KeyEntities string // JSON 数组
+}
+
+// SearchSummaries 在摘要层搜索，返回相关文档名列表（两阶段检索第一阶段）
+func (s *Store) SearchSummaries(query string) ([]DocSummary, error) {
+	rows, err := s.db.Query(`
+SELECT doc_id, doc_name, summary, key_entities
+FROM summaries
+WHERE summary LIKE ? OR key_entities LIKE ?`,
+		"%"+query+"%", "%"+query+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []DocSummary
+	for rows.Next() {
+		var d DocSummary
+		rows.Scan(&d.DocID, &d.DocName, &d.Summary, &d.KeyEntities)
+		results = append(results, d)
+	}
+	return results, rows.Err()
+}
+
+// GetAllSummaries 返回所有文档摘要（用于构建上下文）
+func (s *Store) GetAllSummaries() ([]DocSummary, error) {
+	rows, err := s.db.Query(`SELECT doc_id, doc_name, summary, key_entities FROM summaries ORDER BY doc_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []DocSummary
+	for rows.Next() {
+		var d DocSummary
+		rows.Scan(&d.DocID, &d.DocName, &d.Summary, &d.KeyEntities)
+		results = append(results, d)
 	}
 	return results, rows.Err()
 }

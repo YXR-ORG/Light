@@ -190,3 +190,15 @@ func (s *ChatService) Stream(ctx context.Context, messages []*schema.Message) (*
 	}
 	return llm.Stream(ctx, messages)
 }
+
+// Generate 非流式调用，用于摘要生成等后台任务
+func (s *ChatService) Generate(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
+	s.mu.RLock()
+	llm := s.llm
+	s.mu.RUnlock()
+
+	if llm == nil {
+		return nil, fmt.Errorf("对话模型未配置")
+	}
+	return llm.Generate(ctx, messages)
+}

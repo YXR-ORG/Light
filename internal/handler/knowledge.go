@@ -2,14 +2,19 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"mime"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
+	"github.com/cloudwego/eino/schema"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"light-ai/internal/eino"
 	"light-ai/internal/kb"
 	"light-ai/internal/storage"
 )
@@ -165,7 +170,7 @@ func (h *KnowledgeHandler) PickAndUploadDocuments(kbID string) ([]kb.KBDocument,
 	return docs, nil
 }
 
-// processDocument 异步解析文档并写入 FTS5 索引
+// processDocument 异步解析文档、写入 FTS5、生成摘要、向量化
 func processDocument(store *kb.Store, kbID, docID, name string, data []byte) {
 	text, err := kb.ParseText(data, name)
 	if err != nil {
@@ -185,4 +190,95 @@ func processDocument(store *kb.Store, kbID, docID, name string, data []byte) {
 	}
 	store.UpdateDocumentStatus(docID, "ready", "", len(chunks))
 	storage.IncrKBDocCount(kbID, 1)
+
+	// TODO1: 异步生成摘要（不阻塞主流程）
+	go func() {
+		if err := generateAndStoreSummary(store, docID, name, text); err != nil {
+			slog.Warn("processDocument: summary failed", "name", name, "error", err)
+		}
+	}()
+
+	// TODO2: 异步向量化（不阻塞主流程）
+	go func() {
+		if err := kb.VectorizeDocument(store, docID, chunks); err != nil {
+			slog.Warn("processDocument: vectorize failed", "name", name, "error", err)
+		}
+	}()
+}
+
+// generateAndStoreSummary 调用 LLM 生成文档摘要和关键实体，存入 summaries 表
+func generateAndStoreSummary(store *kb.Store, docID, docName, fullText string) error {
+	// 取前 3000 字符作为摘要生成的输入（避免超出 context）
+	runes := []rune(fullText)
+	if len(runes) > 3000 {
+		runes = runes[:3000]
+	}
+
+	// 获取第一个可用的 enabled provider + model
+	providers, err := storage.ListProviders()
+	if err != nil || len(providers) == 0 {
+		return fmt.Errorf("no provider available")
+	}
+	var provider *storage.LLMProvider
+	for i := range providers {
+		if providers[i].Enabled {
+			provider = &providers[i]
+			break
+		}
+	}
+	if provider == nil {
+		return fmt.Errorf("no enabled provider")
+	}
+	models, err := storage.ListModels(provider.ID)
+	if err != nil || len(models) == 0 {
+		return fmt.Errorf("no models for provider %s", provider.Name)
+	}
+
+	chat := eino.NewChatService()
+	if err := chat.Configure(provider.Type, models[0].Name, provider.APIKey, provider.BaseURL); err != nil {
+		return fmt.Errorf("configure LLM: %w", err)
+	}
+
+	prompt := fmt.Sprintf(`请分析以下文档内容，以JSON格式返回：
+{
+  "summary": "100字以内的文档摘要，概括主题、主要人物、核心事件",
+  "key_entities": ["实体1", "实体2"]
+}
+
+只返回JSON，不要任何其他内容。key_entities最多10个关键人名/地名/概念。
+
+文档名：%s
+文档内容（前3000字）：
+%s`, docName, string(runes))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := chat.Generate(ctx, []*schema.Message{
+		{Role: schema.User, Content: prompt},
+	})
+	if err != nil {
+		return fmt.Errorf("LLM generate: %w", err)
+	}
+
+	raw := strings.TrimSpace(resp.Content)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+
+	var result struct {
+		Summary     string   `json:"summary"`
+		KeyEntities []string `json:"key_entities"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		slog.Warn("generateSummary: JSON parse failed, using raw", "raw", raw)
+		result.Summary = raw
+	}
+	if result.Summary == "" {
+		return fmt.Errorf("empty summary from LLM")
+	}
+
+	entitiesJSON, _ := json.Marshal(result.KeyEntities)
+	return store.UpsertSummary(docID, docName, result.Summary, string(entitiesJSON))
 }
