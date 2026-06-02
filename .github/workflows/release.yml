@@ -8,6 +8,14 @@ on:
 permissions:
   contents: write
 
+env:
+  MODEL_NAME: all-MiniLM-L6-v2
+  MODEL_URL: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
+  TOKENIZER_URL: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json
+  TOKENIZER_CONFIG_URL: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer_config.json
+  VOCAB_URL: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt
+  CONFIG_URL: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json
+
 jobs:
   build-mac:
     name: Build macOS (universal)
@@ -32,13 +40,33 @@ jobs:
         run: npm install
         working-directory: frontend
 
+      - name: Download embedding model
+        run: |
+          mkdir -p build/models/${{ env.MODEL_NAME }}
+          curl -L --retry 3 -o build/models/${{ env.MODEL_NAME }}/model.onnx            "${{ env.MODEL_URL }}"
+          curl -L --retry 3 -o build/models/${{ env.MODEL_NAME }}/tokenizer.json        "${{ env.TOKENIZER_URL }}"
+          curl -L --retry 3 -o build/models/${{ env.MODEL_NAME }}/tokenizer_config.json "${{ env.TOKENIZER_CONFIG_URL }}"
+          curl -L --retry 3 -o build/models/${{ env.MODEL_NAME }}/vocab.txt             "${{ env.VOCAB_URL }}"
+          curl -L --retry 3 -o build/models/${{ env.MODEL_NAME }}/config.json           "${{ env.CONFIG_URL }}"
+          echo "Model files:"
+          ls -lh build/models/${{ env.MODEL_NAME }}/
+
       - name: Build macOS universal
         run: wails build -tags fts5 -platform darwin/universal -ldflags "-X main.Version=${{ github.ref_name }}"
+
+      - name: Copy model into app bundle
+        run: |
+          MODEL_DST="build/bin/Light.app/Contents/Resources/models/${{ env.MODEL_NAME }}"
+          mkdir -p "$MODEL_DST"
+          cp -f build/models/${{ env.MODEL_NAME }}/* "$MODEL_DST/"
+          echo "Bundle model files:"
+          ls -lh "$MODEL_DST/"
 
       - name: Package
         run: |
           cd build/bin
           ditto -c -k --sequesterRsrc --keepParent Light.app Light-mac-universal.zip
+          ls -lh Light-mac-universal.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -69,13 +97,39 @@ jobs:
         run: npm install
         working-directory: frontend
 
+      - name: Download embedding model
+        run: |
+          New-Item -ItemType Directory -Force -Path "build/models/${{ env.MODEL_NAME }}"
+          $files = @{
+            "model.onnx"            = "${{ env.MODEL_URL }}"
+            "tokenizer.json"        = "${{ env.TOKENIZER_URL }}"
+            "tokenizer_config.json" = "${{ env.TOKENIZER_CONFIG_URL }}"
+            "vocab.txt"             = "${{ env.VOCAB_URL }}"
+            "config.json"           = "${{ env.CONFIG_URL }}"
+          }
+          foreach ($name in $files.Keys) {
+            $dest = "build/models/${{ env.MODEL_NAME }}/$name"
+            Invoke-WebRequest -Uri $files[$name] -OutFile $dest -MaximumRetryCount 3
+            Write-Host "$name downloaded: $((Get-Item $dest).Length) bytes"
+          }
+        shell: pwsh
+
       - name: Build Windows
         run: wails build -tags fts5 -platform windows/amd64 -ldflags "-X main.Version=${{ github.ref_name }}"
+
+      - name: Copy model into package
+        run: |
+          $dst = "build/bin/models/${{ env.MODEL_NAME }}"
+          New-Item -ItemType Directory -Force -Path $dst
+          Copy-Item "build/models/${{ env.MODEL_NAME }}/*" $dst
+          Get-ChildItem $dst | Select-Object Name, Length
+        shell: pwsh
 
       - name: Package
         run: |
           cd build/bin
-          Compress-Archive -Path Light.exe -DestinationPath Light-windows-amd64.zip
+          Compress-Archive -Path Light.exe, models -DestinationPath Light-windows-amd64.zip
+          (Get-Item Light-windows-amd64.zip).Length / 1MB
         shell: pwsh
 
       - name: Upload artifact
@@ -108,12 +162,14 @@ jobs:
 
             ### 下载
 
-            | 平台 | 文件 |
-            |------|------|
-            | macOS (Apple Silicon + Intel) | `Light-mac-universal.zip` |
-            | Windows 64位 | `Light-windows-amd64.zip` |
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | macOS (Apple Silicon + Intel) | `Light-mac-universal.zip` | 解压后拖入 Applications |
+            | Windows 64位 | `Light-windows-amd64.zip` | 解压后运行 Light.exe |
 
             > Windows 版需要 [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)（Windows 11 已内置）
+            >
+            > 包含离线 embedding 模型（all-MiniLM-L6-v2），知识库向量检索无需网络连接
           files: |
             Light-mac-universal.zip
             Light-windows-amd64.zip
