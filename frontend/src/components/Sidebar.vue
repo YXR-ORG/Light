@@ -6,6 +6,7 @@ import { useThemeStore } from '../stores/theme'
 import ConversationItem from './ConversationItem.vue'
 import { Create, Delete, List, Search, GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 import { Get } from '../../wailsjs/go/handler/SettingsHandler'
+import { ListProviders } from '../../wailsjs/go/handler/ProviderHandler'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import { ListAgents } from '../../wailsjs/go/handler/AgentHandler'
 import { SetAgent } from '../../wailsjs/go/handler/ConversationHandler'
@@ -109,9 +110,27 @@ async function deleteConv(id: string) {
 }
 
 async function newChat() {
-  const provider = await Get('default_provider').catch(() => 'openai') || 'openai'
-  const model = await Get('default_model').catch(() => 'gpt-4o') || 'gpt-4o'
-  const conv = await Create(provider, model)
+  // 优先用 llm_providers 表里第一个 enabled provider 的 id
+  // 降级到旧的 settings default_provider（type 字符串）
+  let providerID = ''
+  let model = ''
+  try {
+    const providers = await ListProviders()
+    const enabled = providers.filter((p: storage.LLMProvider) => p.enabled)
+    if (enabled.length > 0) {
+      providerID = enabled[0].id
+      // 取该 provider 下 default_model（暂用 settings 表的值）
+      model = await Get('default_model').catch(() => '') || 'gpt-4o'
+    }
+  } catch { /* ignore */ }
+
+  if (!providerID) {
+    // 旧格式兼容
+    providerID = await Get('default_provider').catch(() => 'openai') || 'openai'
+    model = await Get('default_model').catch(() => 'gpt-4o') || 'gpt-4o'
+  }
+
+  const conv = await Create(providerID, model)
   store.setConversations([conv, ...store.conversations])
   store.setCurrentConv(conv.id)
   store.setMessages([])

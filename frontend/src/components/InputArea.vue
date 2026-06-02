@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { StreamChat, CancelStream, PickAttachments } from '../../wailsjs/go/handler/ChatHandler'
 import { Get } from '../../wailsjs/go/handler/SettingsHandler'
@@ -178,6 +178,19 @@ const SKILL_NAMES: Record<string, string> = {
 const currentConv = computed(() => store.conversations.find(c => c.id === store.currentConvId))
 const currentProvider = computed(() => currentConv.value?.provider || '')
 const currentModel = computed(() => currentConv.value?.model || '')
+
+// 旧会话兼容：conv.provider 可能是 type 字符串（openai/claude/...），
+// providerMap 加载完后自动映射到第一个匹配的 provider.id
+watch([providerMap, currentProvider], () => {
+  const pid = currentProvider.value
+  if (!pid || !store.currentConvId) return
+  if (providerMap.value[pid]) return  // 已是 UUID，不需要迁移
+  const matched = Object.values(providerMap.value).find(p => p.type === pid)
+  if (!matched) return
+  const conv = store.conversations.find(c => c.id === store.currentConvId)
+  if (conv) conv.provider = matched.id
+  SetModel(store.currentConvId, matched.id, conv?.model || '').catch(() => {})
+})
 
 const modelLabel = computed(() => {
   if (!currentModel.value) return '选择模型'
