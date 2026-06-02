@@ -40,13 +40,9 @@
 
 ---
 
-### ⏳ TODO-KB-3：摘要层两阶段检索（短期，遗留自 TODO-KB-1）
+### ✅ TODO-KB-3：摘要层两阶段检索（已完成 v1.0.4）
 
-**问题**：summaries 表已建、数据已有，但 `Search()` 里还没用上。
-
-**方案**：检索时先 `SearchSummaries(query)` 得到相关文档列表，把 FTS5/向量检索限定在这些文档范围内，减少噪声。
-
-**工作量**：小，`Search()` 里加一个文档过滤条件即可。
+**实现**：`Search()` 新增阶段一——先调用 `SearchSummaries(query)` 得到相关文档集合，后续四路检索结果按是否命中摘要过滤分为 `primary`（优先）和 `fallback`（兜底）两组，合并后返回 top-k。摘要层无命中时（文档摘要尚未生成）自动降级为全量检索，不影响功能。
 
 ---
 
@@ -73,11 +69,15 @@
 
 ## 其他功能
 
-### 🔮 TODO-APP-1：知识库文档向量打包进 app bundle
+### ✅ TODO-APP-1：embedding 模型打包进 app bundle（已完成 v1.0.4）
 
-**问题**：`all-MiniLM-L6-v2` 模型文件（~90MB ONNX）目前依赖开发机的 chroma 缓存路径，正式发布时用户机器上没有这个文件，向量化会静默降级。
+**实现**：
+- 模型文件（`model.onnx`、`tokenizer.json`、`vocab.txt` 等）放入 `build/models/all-MiniLM-L6-v2/`
+- `Makefile` 新增 `copy-models` target，`build` 后自动复制到 `build/bin/Light.app/Contents/Resources/models/`
+- `embedder.go` 的路径探测改用 `os.Getwd()` 向上遍历，替代不可靠的相对深度路径，兼容 wails dev 和 go run
+- `.gitignore` 排除 `*.onnx` 大文件（86MB 不进 git，需手动放置或 CI 下载）
 
-**方案**：构建时把模型文件复制到 `build/bin/Light.app/Contents/Resources/models/all-MiniLM-L6-v2/`，Makefile 加对应 step。
+**注意**：`make build` 会自动触发 `copy-models`；直接调用 `wails build` 不会，需手动执行 `make copy-models`。
 
 ---
 

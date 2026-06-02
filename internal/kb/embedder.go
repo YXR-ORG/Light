@@ -14,24 +14,42 @@ import (
 	"github.com/knights-analytics/hugot/pipelines"
 )
 
-// modelDir 返回 embedding 模型目录。
-// 优先用 app bundle 内置路径，其次用 chroma 缓存（开发环境）。
+// modelDir 返回 embedding 模型目录，按优先级探测三个位置。
 func modelDir() string {
-	// 1. app bundle: Contents/Resources/models/all-MiniLM-L6-v2
+	const modelName = "all-MiniLM-L6-v2"
+	check := func(dir string) bool {
+		_, err := os.Stat(filepath.Join(dir, "tokenizer.json"))
+		return err == nil
+	}
+
+	// 1. app bundle: Contents/Resources/models/all-MiniLM-L6-v2（生产环境）
 	exe, _ := os.Executable()
-	bundlePath := filepath.Join(filepath.Dir(exe), "..", "Resources", "models", "all-MiniLM-L6-v2")
-	if _, err := os.Stat(filepath.Join(bundlePath, "tokenizer.json")); err == nil {
+	bundlePath := filepath.Join(filepath.Dir(exe), "..", "Resources", "models", modelName)
+	if check(bundlePath) {
 		return bundlePath
 	}
-	// 2. 开发环境：项目根目录 build/models/all-MiniLM-L6-v2
-	devPath := filepath.Join(filepath.Dir(exe), "..", "..", "..", "..", "build", "models", "all-MiniLM-L6-v2")
-	if _, err := os.Stat(filepath.Join(devPath, "tokenizer.json")); err == nil {
-		return devPath
+
+	// 2. 工作目录相对路径 build/models/（wails dev 和直接 go run 均适用）
+	if cwd, err := os.Getwd(); err == nil {
+		// 从当前目录向上找，最多 5 层
+		dir := cwd
+		for i := 0; i < 5; i++ {
+			candidate := filepath.Join(dir, "build", "models", modelName)
+			if check(candidate) {
+				return candidate
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
 	}
-	// 3. chroma 缓存（开发机）
+
+	// 3. chroma 缓存（开发机降级）
 	home, _ := os.UserHomeDir()
-	chromaPath := filepath.Join(home, ".cache", "chroma", "onnx_models", "all-MiniLM-L6-v2", "onnx")
-	if _, err := os.Stat(filepath.Join(chromaPath, "tokenizer.json")); err == nil {
+	chromaPath := filepath.Join(home, ".cache", "chroma", "onnx_models", modelName, "onnx")
+	if check(chromaPath) {
 		return chromaPath
 	}
 	return ""
