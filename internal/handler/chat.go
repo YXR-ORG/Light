@@ -399,10 +399,9 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 				continue
 			}
 			if cutoffPassed {
-				einoMsgs = append(einoMsgs, &schema.Message{
-					Role:    storage.ToEinoRole(m.Role),
-					Content: m.Content,
-				})
+				if msg := historyToEinoMsg(m); msg != nil {
+					einoMsgs = append(einoMsgs, msg)
+				}
 			}
 		}
 	} else {
@@ -411,15 +410,22 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 			if i == len(history)-1 && m.Role == "user" {
 				einoMsgs = append(einoMsgs, buildUserMessage(m.Content, req.Attachments))
 			} else {
-				einoMsgs = append(einoMsgs, historyToEinoMsg(m))
+				if msg := historyToEinoMsg(m); msg != nil {
+					einoMsgs = append(einoMsgs, msg)
+				}
 			}
 		}
 	}
 
 	fullContent, fullThinking := h.runToolLoop(ctx, einoMsgs)
 
-	if _, err := storage.SaveMessage(req.ConversationID, "assistant", fullContent, fullThinking, "", "", "", ""); err != nil {
-		slog.Error("StreamChat save assistant message failed", "error", err)
+	// 只有非空回复才存库，空内容（API 失败/超时）不存，避免污染历史上下文
+	if fullContent != "" {
+		if _, err := storage.SaveMessage(req.ConversationID, "assistant", fullContent, fullThinking, "", "", "", ""); err != nil {
+			slog.Error("StreamChat save assistant message failed", "error", err)
+		}
+	} else {
+		slog.Warn("StreamChat: empty fullContent, skipping save", "conv_id", req.ConversationID)
 	}
 
 	// Auto-generate title for the first message asynchronously
@@ -523,7 +529,13 @@ func buildUserMessage(content string, attachments []Attachment) *schema.Message 
 }
 
 // historyToEinoMsg 将数据库历史消息还原为 eino Message，保留 tool call 信息。
+// 返回 nil 表示该消息应跳过（如空内容的 assistant message，会导致部分 LLM 报 400）。
 func historyToEinoMsg(m storage.Message) *schema.Message {
+	// 跳过空内容的 assistant message（API 失败时遗留的脏数据）
+	if m.Role == "assistant" && m.Content == "" && m.ToolCalls == "" {
+		slog.Debug("historyToEinoMsg: skip empty assistant message", "id", m.ID)
+		return nil
+	}
 	msg := &schema.Message{
 		Role:    storage.ToEinoRole(m.Role),
 		Content: m.Content,
