@@ -47,7 +47,23 @@
           返回
         </button>
         <h3 class="kb-title">{{ activeKB.name }}</h3>
+        <button class="btn-ghost btn-rebuild" :disabled="rebuilding" @click="rebuildIndex" title="重建向量索引和文档摘要">
+          <svg v-if="!rebuilding" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>
+          <span class="status-spinner" v-else style="width:12px;height:12px;border-width:1.5px"></span>
+          {{ rebuilding ? '重建中…' : '重建索引' }}
+        </button>
         <button class="btn-primary" @click="uploadDocs">上传文件</button>
+      </div>
+
+      <!-- 重建进度条 -->
+      <div v-if="rebuilding || rebuildMsg" class="rebuild-progress">
+        <div v-if="rebuilding" class="rebuild-bar">
+          <div class="rebuild-bar-fill" :style="{ width: rebuildPct + '%' }"></div>
+        </div>
+        <div class="rebuild-status">
+          <span v-if="rebuilding">{{ rebuildStep }}</span>
+          <span v-else :class="rebuildSuccess ? 'text-success' : 'text-error'">{{ rebuildMsg }}</span>
+        </div>
       </div>
 
       <div v-if="uploadError" class="kb-error" style="margin-bottom:8px">{{ uploadError }}</div>
@@ -81,9 +97,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import {
   ListKnowledgeBases, CreateKnowledgeBase, DeleteKnowledgeBase,
-  ListDocuments, PickAndUploadDocuments, DeleteDocument, GetDocumentStatus
+  ListDocuments, PickAndUploadDocuments, DeleteDocument, GetDocumentStatus,
+  RebuildIndex
 } from '../../wailsjs/go/handler/KnowledgeHandler'
 import type { storage, kb } from '../../wailsjs/go/models'
 
@@ -99,10 +117,42 @@ const newDesc = ref('')
 const createError = ref('')
 const uploadError = ref('')
 
+// 重建索引状态
+const rebuilding = ref(false)
+const rebuildStep = ref('')
+const rebuildMsg = ref('')
+const rebuildSuccess = ref(true)
+const rebuildCurrent = ref(0)
+const rebuildTotal = ref(0)
+const rebuildPct = ref(0)
+
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
-onMounted(() => refreshList())
-onUnmounted(() => stopPoll())
+onMounted(() => {
+  refreshList()
+  EventsOn('kb:rebuild:progress', (data: any) => {
+    if (!activeKB.value || data.kbID !== activeKB.value.id) return
+    rebuildCurrent.value = data.current
+    rebuildTotal.value = data.total
+    rebuildPct.value = Math.round(((data.current - (data.step === 'summarizing' ? 0.5 : 1)) / data.total) * 100)
+    rebuildStep.value = `${data.step === 'vectorizing' ? '向量化' : '生成摘要'} ${data.docName} (${data.current}/${data.total})`
+  })
+  EventsOn('kb:rebuild:done', (data: any) => {
+    if (!activeKB.value || data.kbID !== activeKB.value.id) return
+    rebuilding.value = false
+    rebuildPct.value = 100
+    rebuildSuccess.value = data.success
+    rebuildMsg.value = data.message
+    // 3 秒后清除消息
+    setTimeout(() => { rebuildMsg.value = '' }, 4000)
+  })
+})
+
+onUnmounted(() => {
+  stopPoll()
+  EventsOff('kb:rebuild:progress')
+  EventsOff('kb:rebuild:done')
+})
 
 async function refreshList() {
   const list = await ListKnowledgeBases().catch(() => [])
@@ -131,6 +181,8 @@ async function deleteKB(id: string, name: string) {
 
 async function openKB(kb: KB) {
   activeKB.value = kb
+  rebuildMsg.value = ''
+  rebuilding.value = false
   await loadDocs()
 }
 
@@ -162,6 +214,21 @@ async function deleteDoc(docID: string, name: string) {
   if (!confirm(`确定删除文档「${name}」？`)) return
   await DeleteDocument(activeKB.value.id, docID).catch(() => null)
   await loadDocs()
+}
+
+async function rebuildIndex() {
+  if (!activeKB.value || rebuilding.value) return
+  rebuilding.value = true
+  rebuildMsg.value = ''
+  rebuildStep.value = '准备中…'
+  rebuildPct.value = 0
+  const err = await RebuildIndex(activeKB.value.id).catch((e: any) => String(e))
+  if (err) {
+    rebuilding.value = false
+    rebuildSuccess.value = false
+    rebuildMsg.value = String(err)
+  }
+  // 成功时等事件回调更新状态
 }
 
 function startPoll() {
@@ -243,4 +310,14 @@ function formatSize(bytes: number) {
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-ghost { padding: var(--space-2) var(--space-4); background: transparent; color: var(--color-text-2); border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: var(--text-sm); font-family: inherit; cursor: pointer; }
 .btn-ghost:hover { background: var(--color-paper-3); }
+.btn-rebuild { display: flex; align-items: center; gap: 5px; }
+.btn-rebuild:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* 重建进度 */
+.rebuild-progress { display: flex; flex-direction: column; gap: 4px; padding: var(--space-2) var(--space-3); background: var(--color-paper-2); border-radius: var(--radius-md); border: 1px solid var(--color-border); }
+.rebuild-bar { height: 4px; background: var(--color-paper-4); border-radius: 2px; overflow: hidden; }
+.rebuild-bar-fill { height: 100%; background: var(--color-accent); border-radius: 2px; transition: width 0.4s ease; }
+.rebuild-status { font-size: var(--text-xs); color: var(--color-text-2); }
+.text-success { color: var(--color-success); }
+.text-error { color: oklch(0.55 0.18 25); }
 </style>

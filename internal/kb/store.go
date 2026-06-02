@@ -501,6 +501,50 @@ func (s *Store) GetAllSummaries() ([]DocSummary, error) {
 	return results, rows.Err()
 }
 
+// AllChunksForDoc 返回某文档的所有 chunks（重建索引用）
+func (s *Store) AllChunksForDoc(docID string) ([]Chunk, error) {
+	rows, err := s.db.Query(`SELECT content, chunk_index FROM chunks WHERE doc_id=? ORDER BY chunk_index`, docID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var chunks []Chunk
+	for rows.Next() {
+		var c Chunk
+		rows.Scan(&c.Content, &c.ChunkIndex)
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
+}
+
+// AllReadyDocuments 返回所有 status=ready 的文档（重建索引用）
+func (s *Store) AllReadyDocuments() ([]KBDocument, error) {
+	rows, err := s.db.Query(`SELECT id, name FROM documents WHERE status='ready'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var docs []KBDocument
+	for rows.Next() {
+		var d KBDocument
+		rows.Scan(&d.ID, &d.Name)
+		docs = append(docs, d)
+	}
+	return docs, rows.Err()
+}
+
+// DeleteVectorsForDoc 删除某文档的所有向量
+func (s *Store) DeleteVectorsForDoc(docID string) error {
+	_, err := s.db.Exec(`DELETE FROM vectors WHERE chunk_id LIKE ?`, docID+"_%")
+	return err
+}
+
+// DeleteSummaryForDoc 删除某文档的摘要
+func (s *Store) DeleteSummaryForDoc(docID string) error {
+	_, err := s.db.Exec(`DELETE FROM summaries WHERE doc_id=?`, docID)
+	return err
+}
+
 // ListDocuments 列出知识库内所有文档
 func (s *Store) ListDocuments() ([]KBDocument, error) {
 	rows, err := s.db.Query(

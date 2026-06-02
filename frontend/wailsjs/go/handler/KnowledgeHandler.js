@@ -30,6 +30,10 @@ export function PickAndUploadDocuments(arg1) {
   return window['go']['handler']['KnowledgeHandler']['PickAndUploadDocuments'](arg1);
 }
 
+export function RebuildIndex(arg1) {
+  return window['go']['handler']['KnowledgeHandler']['RebuildIndex'](arg1);
+}
+
 export function SetContext(arg1) {
   return window['go']['handler']['KnowledgeHandler']['SetContext'](arg1);
 }

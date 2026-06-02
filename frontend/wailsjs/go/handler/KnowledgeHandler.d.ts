@@ -18,4 +18,6 @@ export function ListKnowledgeBases():Promise<Array<storage.KnowledgeBase>>;
 
 export function PickAndUploadDocuments(arg1:string):Promise<Array<kb.KBDocument>>;
 
+export function RebuildIndex(arg1:string):Promise<void>;
+
 export function SetContext(arg1:context.Context):Promise<void>;

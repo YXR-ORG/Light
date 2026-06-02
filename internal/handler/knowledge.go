@@ -206,6 +206,83 @@ func processDocument(store *kb.Store, kbID, docID, name string, data []byte) {
 	}()
 }
 
+// RebuildIndex 重建指定知识库的向量索引和文档摘要（异步，通过事件推送进度）
+// 事件: kb:rebuild:progress {kbID, docID, docName, step, done, total, error}
+// 事件: kb:rebuild:done    {kbID, success, message}
+func (h *KnowledgeHandler) RebuildIndex(kbID string) error {
+	store, err := kb.GetStore(kbID, kbDir(kbID))
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	docs, err := store.AllReadyDocuments()
+	if err != nil {
+		return fmt.Errorf("list documents: %w", err)
+	}
+	if len(docs) == 0 {
+		return fmt.Errorf("知识库没有就绪的文档")
+	}
+
+	go func() {
+		total := len(docs)
+		emit := func(docID, docName, step string, idx int, errMsg string) {
+			runtime.EventsEmit(h.ctx, "kb:rebuild:progress", map[string]any{
+				"kbID":    kbID,
+				"docID":   docID,
+				"docName": docName,
+				"step":    step,   // "vectorizing" | "summarizing"
+				"current": idx,    // 当前是第几个（1-based）
+				"total":   total,
+				"error":   errMsg,
+			})
+		}
+
+		var failed []string
+		for i, doc := range docs {
+			// 1. 重建向量
+			emit(doc.ID, doc.Name, "vectorizing", i+1, "")
+			chunks, err := store.AllChunksForDoc(doc.ID)
+			if err != nil {
+				emit(doc.ID, doc.Name, "vectorizing", i+1, err.Error())
+				failed = append(failed, doc.Name)
+				continue
+			}
+			store.DeleteVectorsForDoc(doc.ID)
+			if err := kb.VectorizeDocument(store, doc.ID, chunks); err != nil {
+				slog.Warn("RebuildIndex: vectorize failed", "doc", doc.Name, "error", err)
+				// 向量化失败不阻断（可能模型未就绪）
+			}
+
+			// 2. 重建摘要
+			emit(doc.ID, doc.Name, "summarizing", i+1, "")
+			store.DeleteSummaryForDoc(doc.ID)
+			// 拼接前 3000 字用于摘要
+			preview := make([]rune, 0, 3000)
+			for _, c := range chunks {
+				preview = append(preview, []rune(c.Content)...)
+				if len(preview) >= 3000 {
+					break
+				}
+			}
+			if err := generateAndStoreSummary(store, doc.ID, doc.Name, string(preview)); err != nil {
+				slog.Warn("RebuildIndex: summary failed", "doc", doc.Name, "error", err)
+			}
+		}
+
+		msg := fmt.Sprintf("重建完成，共 %d 个文档", total)
+		if len(failed) > 0 {
+			msg += fmt.Sprintf("，%d 个失败", len(failed))
+		}
+		runtime.EventsEmit(h.ctx, "kb:rebuild:done", map[string]any{
+			"kbID":    kbID,
+			"success": len(failed) == 0,
+			"message": msg,
+		})
+		slog.Info("RebuildIndex done", "kbID", kbID, "total", total, "failed", len(failed))
+	}()
+
+	return nil // 立即返回，异步执行
+}
+
 // generateAndStoreSummary 调用 LLM 生成文档摘要和关键实体，存入 summaries 表
 func generateAndStoreSummary(store *kb.Store, docID, docName, fullText string) error {
 	// 取前 3000 字符作为摘要生成的输入（避免超出 context）
