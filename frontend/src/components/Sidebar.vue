@@ -32,6 +32,16 @@ const agents = ref<storage.Agent[]>([])
 const showAgentDropdown = ref(false)
 const agentSelectRef = ref<HTMLElement | null>(null)
 
+// providers map: id -> name，用于在列表里显示供应商名称
+const providerMap = ref<Record<string, string>>({})
+
+async function loadProviderMap() {
+  try {
+    const list = await ListProviders()
+    providerMap.value = Object.fromEntries(list.map((p: storage.LLMProvider) => [p.id, p.name]))
+  } catch { /* ignore */ }
+}
+
 const activeAgent = computed(() =>
   agents.value.find(a => a.id === store.activeAgentId) ?? null
 )
@@ -47,6 +57,7 @@ const visibleConvs = computed(() => {
 onMounted(() => {
   loadConversations()
   loadAgents()
+  loadProviderMap()
   unsubConvUpdated = EventsOn('conversation:updated', handleConversationUpdated)
   unsubAgentsUpdated = EventsOn('agents:updated', loadAgents)
   document.addEventListener('mousedown', onDocClick)
@@ -245,6 +256,7 @@ async function newChat() {
         v-for="c in visibleConvs" :key="c.id"
         :conv="c" :active="c.id === store.currentConvId"
         :highlight="searchQuery"
+        :provider-name="providerMap[c.provider] || c.provider"
         @select="selectConv"
         @delete="deleteConv"
         @rename="renameConv"

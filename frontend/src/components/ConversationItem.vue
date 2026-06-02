@@ -6,6 +6,7 @@ const props = defineProps<{
   conv: storage.Conversation
   active: boolean
   highlight?: string
+  providerName?: string
 }>()
 
 const emit = defineEmits<{
@@ -132,7 +133,7 @@ function escapeHtml(s: string) {
         maxlength="120"
       />
       <div v-else class="conv-title" v-html="titleHtml" />
-      <div class="conv-meta">{{ conv.provider }} · {{ conv.model }}</div>
+      <div class="conv-meta">{{ providerName || conv.provider }} · {{ conv.model }}</div>
     </div>
 
     <!-- hover 操作区：删除（两步确认） -->
