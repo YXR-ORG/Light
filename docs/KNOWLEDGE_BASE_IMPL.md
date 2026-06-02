@@ -4,7 +4,118 @@
 
 ---
 
-## 一、架构总览
+## 一、整体设计思路
+
+### 1.1 产品定位
+
+Light 是一款**本地桌面客户端**，知识库功能的核心约束是：
+
+- **零服务器依赖**：无后端服务、无网络请求，所有数据和计算都在用户本机
+- **开箱即用**：无需安装额外软件、数据库服务或 Python 环境
+- **轻量可靠**：单用户场景，数据规模有限（数十个文档），不需要分布式索引
+
+这决定了技术选型的核心原则：**用 SQLite 搞定一切**。
+
+---
+
+### 1.2 整体技术方案
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         用户界面                             │
+│  [知识库管理]  上传文档 / 新建 / 删除 / 重建索引             │
+│  [对话输入框] 选择「知识」模式 → 选择知识库 → 发送问题       │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│                    文档处理 Pipeline                          │
+│                                                              │
+│  上传文件（Wails 原生对话框，零 IPC 开销）                    │
+│       ↓                                                      │
+│  文档解析（PDF/DOCX/Excel/纯文本）                           │
+│       ↓                                                      │
+│  文本分块（400字/块，64字重叠，段落优先）                     │
+│       ↓                              ↓异步                   │
+│  FTS5 全文索引写入            向量化（all-MiniLM-L6-v2）     │
+│  （同步，写入即可用）          + 摘要生成（LLM）              │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ 存储
+┌──────────────────────▼──────────────────────────────────────┐
+│                  kb.db（每个知识库独立 SQLite）               │
+│                                                              │
+│  chunks 表        FTS5 trigram 索引   vectors 表             │
+│  （原始文本块）   （关键词全文检索）   （384 维 float32）      │
+│                                                              │
+│  summaries 表（LLM 生成的文档摘要 + 关键实体 JSON）           │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ 检索
+┌──────────────────────▼──────────────────────────────────────┐
+│              四路融合检索 Store.Search()                      │
+│                                                              │
+│  路径1: FTS5 AND（精确关键词，精度最高）                      │
+│  路径2: 向量余弦相似度（语义理解，能找同义表达）              │
+│  路径3: FTS5 OR（扩大关键词召回）                             │
+│  路径4: LIKE（短词兜底，如"张嘎"2字无法建 trigram 索引）      │
+│                                                              │
+│  四路结果去重合并 → 返回 top-k chunks                        │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ 对话
+┌──────────────────────▼──────────────────────────────────────┐
+│              KnowledgeSearchTool（eino InvokableTool）        │
+│                                                              │
+│  LLM 通过 function call 主动调用 search_knowledge 工具       │
+│  system prompt 强制规则：分实体搜索 / 先搜索后回答            │
+│  LLM 综合多个 chunk 推理，标注来源文档                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 1.3 关键设计决策
+
+**决策1：每个知识库一个独立 kb.db**
+
+隔离性好，删除知识库直接删文件，互不干扰。主数据库只存元数据（id/name/doc_count），知识库数据完全在独立文件里。
+
+**决策2：FTS5 trigram tokenizer，而非 unicode61**
+
+`unicode61` 对中文分词不可预测（`孙小仙` 被切成 `孙`+`小仙`），trigram 把每段文本切成所有 3 字符子串，任意子串都可搜索，对中文完全可靠。代价是索引体积增大 3-5 倍，单机场景完全可接受。
+
+**决策3：FTS5 独立存储，不用 content= 外部表模式**
+
+`content=` 外部表模式在事务内 rebuild 看不到未提交数据，导致索引为空（我们踩过的坑）。改为写 chunk 时同步写 FTS5，彻底消除同步问题。
+
+**决策4：向量化和摘要生成都异步，不阻塞文档就绪**
+
+文档解析→分块→FTS5 写入完成后，状态立即变为 `ready`，用户可以立刻开始对话。向量化（约 1-2 分钟）和摘要生成（1 次 LLM 调用）在后台异步执行，不影响核心流程。
+
+**决策5：LLM 主动调用 tool，而非 prompt injection**
+
+不把检索结果直接塞进 system prompt，而是让 LLM 通过 function call 按需检索。优点：LLM 可以自主决定搜多少次、搜什么词，跨文档问题时能分多次搜索不同实体。
+
+**决策6：hugot 纯 Go backend，零 CGO 向量化**
+
+`all-MiniLM-L6-v2` ONNX 模型通过 `hugot`（GoMLX 后端）在 Go 进程内运行，无需 Python 环境、Ollama、或任何外部服务。开发机利用 ChromaDB 已缓存的模型文件，生产环境打包进 app bundle。
+
+---
+
+### 1.4 与服务端 RAG 架构的对比
+
+| 维度 | Light（桌面端） | 服务端典型方案 |
+|------|----------------|---------------|
+| 向量库 | SQLite BLOB + 全量余弦扫描 | Qdrant / Pinecone / Weaviate |
+| 全文检索 | FTS5 trigram | Elasticsearch / 自建 BM25 |
+| Embedding | all-MiniLM-L6-v2（本地 ONNX） | OpenAI ada-002 / bge-m3（API） |
+| 混合检索 | 四路融合（FTS5-AND/OR + 向量 + LIKE） | Dense + Sparse + RRF |
+| Reranker | 无（小规模不必要） | bge-reranker / Cohere Rerank |
+| 数据规模 | 数十文档，百 MB 以内 | 百万文档，TB 级 |
+| 延迟 | 毫秒级（本地全量扫描） | 百毫秒级（网络 + ANN 索引） |
+
+桌面端的优势是**延迟极低**（全量扫描在小数据集上比 ANN 索引更快）、**零网络依赖**。规模扩大后向量检索需要换成 ANN 索引（如 sqlite-vec 或外部向量库），全文检索层的设计思路不变。
+
+---
+
+## 二、系统架构
 
 ```
 用户操作（前端）
@@ -25,9 +136,9 @@ Store.Search()  ← 四路融合：FTS5-AND + 向量余弦 + FTS5-OR + LIKE
 
 ---
 
-## 二、数据存储
+## 三、数据存储
 
-### 2.1 目录结构
+### 3.1 目录结构
 
 ```
 ~/.wails-chat/
@@ -40,7 +151,7 @@ Store.Search()  ← 四路融合：FTS5-AND + 向量余弦 + FTS5-OR + LIKE
         {doc_id}_{filename}         ← 原始文件备份
 ```
 
-### 2.2 主数据库 knowledge_bases 表
+### 3.2 主数据库 knowledge_bases 表
 
 ```sql
 CREATE TABLE knowledge_bases (
@@ -55,7 +166,7 @@ CREATE TABLE knowledge_bases (
 
 GORM model：`storage.KnowledgeBase`，由 `AutoMigrate` 自动创建。
 
-### 2.3 知识库数据库 kb.db 表结构
+### 3.3 知识库数据库 kb.db 表结构
 
 ```sql
 -- 文档元数据
@@ -107,7 +218,7 @@ CREATE TABLE summaries (
 
 ---
 
-## 三、创建知识库
+## 四、创建知识库
 
 **调用链：**
 ```
@@ -123,9 +234,9 @@ kb.db 此时尚未创建，首次调用 `kb.GetStore()` 时才会触发 `openSto
 
 ---
 
-## 四、上传文件与文档处理 Pipeline
+## 五、上传文件与文档处理 Pipeline
 
-### 4.1 上传流程
+### 11.1 上传流程
 
 ```
 前端点击「上传文件」
@@ -144,7 +255,7 @@ kb.db 此时尚未创建，首次调用 `kb.GetStore()` 时才会触发 `openSto
 **文件大小限制：** 50MB，超过则跳过并记录日志。
 **代码位置：** `internal/handler/knowledge.go:115`
 
-### 4.2 文档处理（processDocument）
+### 8.2 文档处理（processDocument）
 
 ```go
 // internal/handler/knowledge.go:174
@@ -170,7 +281,7 @@ func processDocument(store, kbID, docID, name, data) {
 }
 ```
 
-### 4.3 文档解析（ParseText）
+### 7.3 文档解析（ParseText）
 
 **代码位置：** `internal/kb/parser.go`
 
@@ -181,7 +292,7 @@ func processDocument(store, kbID, docID, name, data) {
 | `.xlsx` `.xls` | `github.com/xuri/excelize/v2` v2.9.1 | 逐 sheet/行转 TSV 文本 |
 | 其他 | 直接 `string(data)` | txt/md/csv/json/yaml/xml/html/代码等 |
 
-### 4.4 文本分块（SplitChunks）
+### 5.4 文本分块（SplitChunks）
 
 **代码位置：** `internal/kb/chunker.go`
 
@@ -198,9 +309,9 @@ func processDocument(store, kbID, docID, name, data) {
 
 ---
 
-## 五、FTS5 全文索引
+## 六、FTS5 全文索引
 
-### 5.1 选择 trigram tokenizer 的原因
+### 11.1 选择 trigram tokenizer 的原因
 
 `unicode61`（默认）对中文分词不可靠：`孙小仙` 被切成 `孙` + `小仙` 两个 token，搜索 `"孙小仙"` 短语返回 0 结果。
 
@@ -208,19 +319,19 @@ func processDocument(store, kbID, docID, name, data) {
 - `孙小仙` → `孙小仙`（3字正好）直接入索引 ✅
 - `张嘎`（2字）不满足 trigram 最小长度，用 LIKE 补充 ✅
 
-### 5.2 独立存储模式
+### 8.2 独立存储模式
 
 FTS5 **不使用** `content=` 外部表模式（该模式在事务内 rebuild 看不到未提交数据，导致索引为空）。改为独立存储：`InsertChunks` 在同一事务内同时写 `chunks` 和 `chunks_fts`。
 
-### 5.3 自动迁移
+### 7.3 自动迁移
 
 `migrate()` 检测 `chunks_fts` 的建表 SQL，若含 `content=` 或 `unicode61` 关键字，自动 DROP 并重建，同时从 `chunks` 表重新填充索引（用户无感知）。
 
 ---
 
-## 六、向量检索
+## 七、向量检索
 
-### 6.1 Embedding 模型
+### 11.1 Embedding 模型
 
 | 项目 | 值 |
 |------|----|
@@ -249,7 +360,7 @@ func getEmbedder() (*pipelines.FeatureExtractionPipeline, error) {
 func Embed(texts []string) ([][]float32, error)
 ```
 
-### 6.2 向量化 Pipeline
+### 8.2 向量化 Pipeline
 
 **代码位置：** `internal/kb/vectorize.go`
 
@@ -264,7 +375,7 @@ func Embed(texts []string) ([][]float32, error)
 
 **批大小：** 32 条（hugot 纯 Go backend 推荐值）
 
-### 6.3 向量检索
+### 7.3 向量检索
 
 **代码位置：** `internal/kb/vectorize.go:VectorSearch`
 
@@ -279,9 +390,9 @@ query → Embed([query]) → queryVec（384 维，已 L2 归一化）
 
 ---
 
-## 七、摘要索引
+## 八、摘要索引
 
-### 7.1 生成流程
+### 11.1 生成流程
 
 **代码位置：** `internal/handler/knowledge.go:generateAndStoreSummary`
 
@@ -297,7 +408,7 @@ query → Embed([query]) → queryVec（384 维，已 L2 归一化）
 
 **降级：** LLM 不可用时摘要生成失败，仅记录日志，不影响 FTS5 和向量检索。
 
-### 7.2 摘要表用途
+### 8.2 摘要表用途
 
 - 快速定位相关文档（两阶段检索第一阶段）
 - 重建索引时提供文档上下文
@@ -305,7 +416,7 @@ query → Embed([query]) → queryVec（384 维，已 L2 归一化）
 
 ---
 
-## 八、四路融合检索
+## 九、四路融合检索
 
 **代码位置：** `internal/kb/store.go:Search`
 
@@ -330,7 +441,7 @@ Search(query, topK) → []SearchResult
 
 **topK：** 默认 10，上限 20。
 
-### 8.1 FTS5 查询构建
+### 11.1 FTS5 查询构建
 
 ```go
 // buildFTS5Query 区分长词和短词
@@ -342,9 +453,9 @@ func buildFTS5Query(query string) (andQuery, orQuery string, shortTerms []string
 
 ---
 
-## 九、对话集成
+## 十、对话集成
 
-### 9.1 KnowledgeSearchTool
+### 11.1 KnowledgeSearchTool
 
 **代码位置：** `internal/eino/knowledge_tool.go`
 
@@ -366,7 +477,7 @@ Params:
 }
 ```
 
-### 9.2 StreamChat 集成
+### 11.2 StreamChat 集成
 
 **代码位置：** `internal/handler/chat.go:303`
 
@@ -390,13 +501,13 @@ systemContent += `
 
 ---
 
-## 十、重建索引
+## 十一、重建索引
 
-### 10.1 触发方式
+### 11.1 触发方式
 
 设置 → 知识库 → 点击知识库详情 → 右上角「重建索引」按钮。
 
-### 10.2 重建流程
+### 11.2 重建流程
 
 **代码位置：** `internal/handler/knowledge.go:RebuildIndex`
 
@@ -415,7 +526,7 @@ goroutine：
   完成后推送 kb:rebuild:done
 ```
 
-### 10.3 进度事件
+### 11.3 进度事件
 
 **`kb:rebuild:progress`** 事件结构：
 ```json
@@ -442,7 +553,7 @@ goroutine：
 
 ---
 
-## 十一、降级策略
+## 十二、降级策略
 
 | 场景 | 处理方式 |
 |------|---------|
@@ -455,7 +566,7 @@ goroutine：
 
 ---
 
-## 十二、关键依赖
+## 十三、关键依赖
 
 | 包 | 版本 | 用途 |
 |----|------|------|
