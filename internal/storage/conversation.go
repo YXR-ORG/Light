@@ -30,7 +30,7 @@ func ListConversations() ([]Conversation, error) {
 
 func UpdateConversationTitle(id, title string) error {
 	return DB.Model(&Conversation{}).Where("id = ?", id).
-		Updates(map[string]any{"title": title, "updated_at": time.Now()}).Error
+		UpdateColumn("title", title).Error
 }
 
 func SearchConversations(query string) ([]Conversation, error) {
@@ -60,7 +60,7 @@ func UpdateConversationModel(id, provider, model string) error {
 		Updates(map[string]any{"provider": provider, "model": model, "updated_at": time.Now()}).Error
 }
 
-// ToggleFavorite 切换对话收藏状态，返回切换后的值
+// ToggleFavorite 切换对话收藏状态，返回切换后的值（不更新 updated_at，不影响排序）
 func ToggleFavorite(id string) (bool, error) {
 	var c Conversation
 	if err := DB.First(&c, "id = ?", id).Error; err != nil {
@@ -68,7 +68,7 @@ func ToggleFavorite(id string) (bool, error) {
 	}
 	newVal := !c.Starred
 	err := DB.Model(&Conversation{}).Where("id = ?", id).
-		Updates(map[string]any{"starred": newVal, "updated_at": time.Now()}).Error
+		UpdateColumn("starred", newVal).Error
 	return newVal, err
 }
 
