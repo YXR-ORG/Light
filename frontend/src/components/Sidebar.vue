@@ -26,6 +26,7 @@ const searchQuery = ref('')
 const convTab = ref<'all' | 'starred'>('all')
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let unsubConvUpdated: (() => void) | null = null
+let unsubAgentsUpdated: (() => void) | null = null
 
 const agents = ref<storage.Agent[]>([])
 const showAgentDropdown = ref(false)
@@ -47,11 +48,13 @@ onMounted(() => {
   loadConversations()
   loadAgents()
   unsubConvUpdated = EventsOn('conversation:updated', handleConversationUpdated)
+  unsubAgentsUpdated = EventsOn('agents:updated', loadAgents)
   document.addEventListener('mousedown', onDocClick)
 })
 
 onUnmounted(() => {
   if (unsubConvUpdated) unsubConvUpdated()
+  if (unsubAgentsUpdated) unsubAgentsUpdated()
   document.removeEventListener('mousedown', onDocClick)
 })
 

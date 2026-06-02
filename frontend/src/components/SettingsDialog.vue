@@ -11,7 +11,7 @@ import { ListAgents, SaveAgent, DeleteAgent } from '../../wailsjs/go/handler/Age
 import { ListSkills, SaveSkill, ToggleSkill, DeleteSkill, ImportSkillZip } from '../../wailsjs/go/handler/SkillHandler'
 import { Get as GetSetting, Set as SetSetting } from '../../wailsjs/go/handler/SettingsHandler'
 import { SaveConfig, GetConfig, Backup, ListBackups, Restore, DeleteBackup } from '../../wailsjs/go/handler/BackupHandler'
-import { BrowserOpenURL } from '../../wailsjs/runtime/runtime'
+import { BrowserOpenURL, EventsEmit } from '../../wailsjs/runtime/runtime'
 import AboutPanel from './AboutPanel.vue'
 import type { storage, handler } from '../../wailsjs/go/models'
 
@@ -212,6 +212,7 @@ async function saveAgentForm() {
       : { id: '', name: agentForm.value.name, icon: agentForm.value.icon, description: agentForm.value.description, system_prompt: agentForm.value.system_prompt, sort_order: agents.value.length, builtin: false }
     await SaveAgent(a)
     await loadAgents()
+    EventsEmit('agents:updated')
     showAgentForm.value = false
     editingAgent.value = null
   } finally {
@@ -222,6 +223,7 @@ async function saveAgentForm() {
 async function deleteAgent(id: string) {
   await DeleteAgent(id).catch(console.error)
   await loadAgents()
+  EventsEmit('agents:updated')
 }
 
 // ── Skills ──
