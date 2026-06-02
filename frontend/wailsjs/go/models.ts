@@ -46,6 +46,7 @@ export namespace handler {
 	    attachments: Attachment[];
 	    mode: string;
 	    knowledge_base_id: string;
+	    regenerate_group_id: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SendMessageRequest(source);
@@ -66,6 +67,7 @@ export namespace handler {
 	        this.attachments = this.convertValues(source["attachments"], Attachment);
 	        this.mode = source["mode"];
 	        this.knowledge_base_id = source["knowledge_base_id"];
+	        this.regenerate_group_id = source["regenerate_group_id"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -339,6 +341,8 @@ export namespace storage {
 	    mcp_server_ids: string;
 	    mode: string;
 	    knowledge_base_id: string;
+	    generation_group_id: string;
+	    gen_index: number;
 	    // Go type: time
 	    created_at: any;
 	
@@ -360,6 +364,8 @@ export namespace storage {
 	        this.mcp_server_ids = source["mcp_server_ids"];
 	        this.mode = source["mode"];
 	        this.knowledge_base_id = source["knowledge_base_id"];
+	        this.generation_group_id = source["generation_group_id"];
+	        this.gen_index = source["gen_index"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	    }
 	

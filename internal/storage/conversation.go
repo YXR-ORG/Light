@@ -69,16 +69,19 @@ func DeleteConversation(id string) error {
 }
 
 func SaveMessage(convID, role, content, thinking, toolCalls, toolResult, agentID, mcpServerIDs string, attachments ...string) (*Message, error) {
+	id := NewID()
 	m := &Message{
-		ID:             NewID(),
-		ConversationID: convID,
-		Role:           role,
-		Content:        content,
-		Thinking:       thinking,
-		ToolCalls:      toolCalls,
-		ToolResult:     toolResult,
-		AgentID:        agentID,
-		MCPServerIDs:   mcpServerIDs,
+		ID:                id,
+		ConversationID:    convID,
+		Role:              role,
+		Content:           content,
+		Thinking:          thinking,
+		ToolCalls:         toolCalls,
+		ToolResult:        toolResult,
+		AgentID:           agentID,
+		MCPServerIDs:      mcpServerIDs,
+		GenerationGroupID: id, // 默认 group = 自身，首次生成
+		GenIndex:          0,
 	}
 	if len(attachments) > 0 {
 		m.Attachments = attachments[0]
@@ -91,9 +94,60 @@ func SaveMessage(convID, role, content, thinking, toolCalls, toolResult, agentID
 	return m, err
 }
 
+// SaveRegeneratedMessage 保存重新生成的 assistant 消息，归入已有 group
+func SaveRegeneratedMessage(convID, content, thinking, groupID string, genIndex int) (*Message, error) {
+	m := &Message{
+		ID:                NewID(),
+		ConversationID:    convID,
+		Role:              "assistant",
+		Content:           content,
+		Thinking:          thinking,
+		GenerationGroupID: groupID,
+		GenIndex:          genIndex,
+	}
+	err := DB.Create(m).Error
+	if err == nil {
+		DB.Model(&Conversation{}).Where("id = ?", convID).
+			Update("updated_at", time.Now())
+	}
+	return m, err
+}
+
+// GetMessages 返回所有消息（含重生成历史版本），前端自行分组展示
 func GetMessages(convID string) ([]Message, error) {
 	var msgs []Message
 	err := DB.Where("conversation_id = ?", convID).
 		Order("created_at ASC").Find(&msgs).Error
 	return msgs, err
+}
+
+// GetLatestMessages 返回对话消息，每个 generation group 只取最新版（gen_index 最大）
+// 用于构建 einoMsgs 历史上下文，不把旧版本带入
+func GetLatestMessages(convID string) ([]Message, error) {
+	all, err := GetMessages(convID)
+	if err != nil {
+		return nil, err
+	}
+	// 按 group 去重：保留每组 gen_index 最大的一条
+	type groupKey = string
+	latest := make(map[groupKey]*Message)
+	order := []groupKey{}
+	for i := range all {
+		m := &all[i]
+		gid := m.GenerationGroupID
+		if gid == "" {
+			gid = m.ID // 旧数据兼容
+		}
+		if prev, ok := latest[gid]; !ok {
+			latest[gid] = m
+			order = append(order, gid)
+		} else if m.GenIndex > prev.GenIndex {
+			latest[gid] = m
+		}
+	}
+	result := make([]Message, 0, len(order))
+	for _, gid := range order {
+		result = append(result, *latest[gid])
+	}
+	return result, nil
 }

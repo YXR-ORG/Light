@@ -19,7 +19,8 @@ const props = defineProps<{
   msg: storage.Message
   streaming?: boolean
   thinking?: string
-  isLast?: boolean      // 是否是最后一条 assistant 消息
+  isLast?: boolean      // 是否是最后一条（保留用于重新生成按钮判断）
+  showActions?: boolean // 是否显示操作按钮（所有历史 assistant 消息都显示）
 }>()
 
 const emit = defineEmits<{
@@ -103,15 +104,14 @@ async function copyContent() {
       <div class="msg-text markdown-body" v-else v-html="renderedContent || ''" />
       <span v-if="props.streaming && !isUser" class="cursor" />
 
-      <!-- 操作按钮：最后一条 assistant 消息且非 streaming 时显示 -->
-      <div v-if="!isUser && isLast && !streaming" class="msg-actions">
+      <!-- 操作按钮：所有历史 assistant 消息 hover 时显示 -->
+      <div v-if="!isUser && showActions && !streaming" class="msg-actions">
         <button class="msg-action-btn" :class="{ copied }" @click="copyContent" :title="copied ? '已复制' : '复制'">
-          <!-- 已复制：勾 -->
           <svg v-if="copied" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-          <!-- 复制图标 -->
           <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         </button>
-        <button class="msg-action-btn" @click="emit('regenerate')" title="重新生成">
+        <!-- 重新生成只在最后一条显示 -->
+        <button v-if="isLast" class="msg-action-btn" @click="emit('regenerate')" title="重新生成">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>
         </button>
       </div>

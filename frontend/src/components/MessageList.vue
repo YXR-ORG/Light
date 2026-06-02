@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { useChatStore } from '../stores/chat'
 import MessageItem from './MessageItem.vue'
-import { storage as models } from '../../wailsjs/go/models'
+import { storage as models, type storage } from '../../wailsjs/go/models'
 import { ref, watch, nextTick, computed } from 'vue'
 import { StreamChat } from '../../wailsjs/go/handler/ChatHandler'
-import type { storage } from '../../wailsjs/go/models'
 
 const store = useChatStore()
 const listRef = ref<HTMLElement | null>(null)
@@ -20,22 +19,88 @@ function makeStreamMsg(content: string) {
   return m
 }
 
-// 最后一条 assistant 消息的 id（streaming 时不显示按钮）
-const lastAssistantId = computed(() => {
-  if (store.streaming) return null
-  for (let i = store.messages.length - 1; i >= 0; i--) {
-    if (store.messages[i].role === 'assistant') return store.messages[i].id
+// ── generation group 版本切换 ──────────────────────────────────────
+// activeGenIndex[groupID] = 当前展示的版本索引（-1 = 最新）
+const activeGenIndex = ref<Record<string, number>>({})
+
+// 把消息列表转成渲染序列：同一 group 的 assistant 消息只展示选中版本
+interface DisplayMsg {
+  msg: storage.Message
+  groupVersions: storage.Message[] // 该 group 的所有版本（仅 assistant 多版本时有值）
+  isLastAssistant: boolean
+}
+
+const displayMessages = computed((): DisplayMsg[] => {
+  const msgs = store.messages
+  if (!msgs.length) return []
+
+  // 按 group 归组（保留插入顺序）
+  const groupMap = new Map<string, storage.Message[]>()
+  const groupOrder: string[] = []
+
+  for (const m of msgs) {
+    const gid = m.generation_group_id || m.id
+    if (!groupMap.has(gid)) {
+      groupMap.set(gid, [])
+      groupOrder.push(gid)
+    }
+    groupMap.get(gid)!.push(m)
   }
-  return null
+
+  const result: DisplayMsg[] = []
+
+  for (const gid of groupOrder) {
+    const group = groupMap.get(gid)!
+    // 非 assistant 消息（user/tool）直接展示
+    if (group[0].role !== 'assistant') {
+      for (const m of group) {
+        result.push({ msg: m, groupVersions: [], isLastAssistant: false })
+      }
+      continue
+    }
+
+    // assistant 消息：按 gen_index 升序排列
+    const sorted = [...group].sort((a, b) => (a.gen_index ?? 0) - (b.gen_index ?? 0))
+
+    // 当前展示索引（默认最新）
+    let idx = activeGenIndex.value[gid] ?? (sorted.length - 1)
+    if (idx >= sorted.length) idx = sorted.length - 1
+
+    result.push({
+      msg: sorted[idx],
+      groupVersions: sorted.length > 1 ? sorted : [],
+      isLastAssistant: false, // 先占位，后面填
+    })
+  }
+
+  // 标记最后一条 assistant
+  for (let i = result.length - 1; i >= 0; i--) {
+    if (result[i].msg.role === 'assistant') {
+      result[i] = { ...result[i], isLastAssistant: true }
+      break
+    }
+  }
+
+  return result
 })
 
-// 重新生成：找最后一条 user 消息重发
-async function handleRegenerate() {
+function switchVersion(groupID: string, delta: number, versions: storage.Message[]) {
+  const cur = activeGenIndex.value[groupID] ?? (versions.length - 1)
+  const next = Math.max(0, Math.min(versions.length - 1, cur + delta))
+  activeGenIndex.value = { ...activeGenIndex.value, [groupID]: next }
+}
+
+function currentVersionLabel(groupID: string, versions: storage.Message[]) {
+  const idx = activeGenIndex.value[groupID] ?? (versions.length - 1)
+  return `${idx + 1} / ${versions.length}`
+}
+
+// ── 重新生成 ─────────────────────────────────────────────────────────
+async function handleRegenerate(groupID: string) {
   if (store.streaming) return
   const conv = store.conversations.find(c => c.id === store.currentConvId)
   if (!conv || !store.currentConvId) return
 
-  // 找最后一条 user 消息
   let lastUserMsg: storage.Message | null = null
   for (let i = store.messages.length - 1; i >= 0; i--) {
     if (store.messages[i].role === 'user') { lastUserMsg = store.messages[i]; break }
@@ -55,11 +120,12 @@ async function handleRegenerate() {
       mcp_server_ids: [],
       skill_ids: [],
       web_search: false,
-      mode: (conv as any).mode || 'normal',
-      knowledge_base_id: (conv as any).knowledge_base_id || '',
+      mode: 'chat',
+      knowledge_base_id: '',
       ignore_context: false,
       context_cutoff_id: store.contextCutoffId ?? '',
       attachments: [],
+      regenerate_group_id: groupID, // 告诉后端归入哪个 group
     } as any)
   } catch (e: any) {
     store.setStreaming(false)
@@ -67,6 +133,7 @@ async function handleRegenerate() {
   }
 }
 
+// ── 滚动控制 ─────────────────────────────────────────────────────────
 function isAtBottom(): boolean {
   const el = listRef.value
   if (!el) return true
@@ -92,7 +159,11 @@ function onScroll() {
 watch(() => store.messages.length, () => { userScrolled = false; scrollToBottom(true) })
 watch(() => store.streamContent, () => scrollToBottom(false))
 watch(() => store.streaming, (v) => { if (!v) userScrolled = false })
-watch(() => store.currentConvId, () => { userScrolled = false; scrollToBottom(true) })
+watch(() => store.currentConvId, () => {
+  userScrolled = false
+  activeGenIndex.value = {}
+  scrollToBottom(true)
+})
 </script>
 
 <template>
@@ -100,18 +171,46 @@ watch(() => store.currentConvId, () => { userScrolled = false; scrollToBottom(tr
     <div v-if="!store.messages.length && !store.streamContent" class="msg-hint">
       <p>发送一条消息开始对话</p>
     </div>
-    <template v-for="(m, idx) in store.messages" :key="m.id">
+
+    <template v-for="(item, idx) in displayMessages" :key="item.msg.id">
       <MessageItem
-        :msg="m"
-        :is-last="m.id === lastAssistantId"
-        @regenerate="handleRegenerate"
+        :msg="item.msg"
+        :is-last="item.isLastAssistant"
+        :show-actions="item.msg.role === 'assistant'"
+        @regenerate="handleRegenerate(item.msg.generation_group_id || item.msg.id)"
       />
-      <div v-if="store.contextCutoffId && m.id === store.contextCutoffId" class="ctx-divider">
+
+      <!-- 多版本切换条 -->
+      <div
+        v-if="item.groupVersions.length > 1"
+        class="gen-switcher"
+      >
+        <button
+          class="gen-btn"
+          :disabled="(activeGenIndex[item.msg.generation_group_id || item.msg.id] ?? item.groupVersions.length - 1) === 0"
+          @click="switchVersion(item.msg.generation_group_id || item.msg.id, -1, item.groupVersions)"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="gen-label">{{ currentVersionLabel(item.msg.generation_group_id || item.msg.id, item.groupVersions) }}</span>
+        <button
+          class="gen-btn"
+          :disabled="(activeGenIndex[item.msg.generation_group_id || item.msg.id] ?? item.groupVersions.length - 1) === item.groupVersions.length - 1"
+          @click="switchVersion(item.msg.generation_group_id || item.msg.id, 1, item.groupVersions)"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+
+      <!-- context cutoff divider -->
+      <div v-if="store.contextCutoffId && item.msg.id === store.contextCutoffId" class="ctx-divider">
         <span class="ctx-divider-line" />
         <span class="ctx-divider-label">上下文从此处清除</span>
         <span class="ctx-divider-line" />
       </div>
     </template>
+
+    <!-- 流式消息 -->
     <div v-if="store.streamContent || store.streaming" class="streaming">
       <MessageItem
         v-if="store.streamContent || store.streamThinking"
@@ -131,81 +230,43 @@ watch(() => store.currentConvId, () => { userScrolled = false; scrollToBottom(tr
 <style scoped>
 .message-list {
   flex: 1;
-  overflow-y: scroll; /* 强制常显滚动条轨道 */
+  overflow-y: scroll;
   padding: var(--space-2) 0;
 }
+.message-list::-webkit-scrollbar { width: 12px; }
+.message-list::-webkit-scrollbar-track { background: transparent; margin: 8px 0; }
+.message-list::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 99px; min-height: 40px; border: 3px solid transparent; background-clip: padding-box; }
+.message-list::-webkit-scrollbar-thumb:hover { background-color: var(--color-text-3); border-width: 1px; background-clip: padding-box; }
 
-.message-list::-webkit-scrollbar {
-  width: 12px;
-}
-.message-list::-webkit-scrollbar-track {
-  background: transparent;
-  margin: 8px 0;
-}
-.message-list::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 99px;
-  min-height: 40px;
-  border: 3px solid transparent;
-  background-clip: padding-box;
-}
-.message-list::-webkit-scrollbar-thumb:hover {
-  background-color: var(--color-text-3);
-  border-width: 1px;
-  background-clip: padding-box;
-}
-
-.msg-hint {
-  text-align: center;
-  padding: var(--space-12) var(--space-4);
-  color: var(--color-text-3);
-  font-size: var(--text-sm);
-}
-
+.msg-hint { text-align: center; padding: var(--space-12) var(--space-4); color: var(--color-text-3); font-size: var(--text-sm); }
 .streaming { opacity: 1; }
 
-.ctx-divider {
-  display: flex; align-items: center; gap: var(--space-3);
-  padding: var(--space-2) var(--space-6);
-  user-select: none;
+/* 版本切换条 */
+.gen-switcher {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 2px var(--space-6) var(--space-2);
+  background: var(--color-paper-2);
 }
-.ctx-divider-line {
-  flex: 1; height: 1px;
-  background: linear-gradient(90deg, transparent, oklch(0.65 0.15 25 / 0.4), transparent);
+.gen-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  border: none; background: transparent; color: var(--color-text-3);
+  cursor: pointer; border-radius: var(--radius-sm);
+  transition: background var(--duration-fast), color var(--duration-fast);
 }
-.ctx-divider-label {
-  font-size: 10px; font-weight: 500;
-  color: oklch(0.65 0.15 25 / 0.7);
-  white-space: nowrap; letter-spacing: 0.05em;
-}
+.gen-btn:hover:not(:disabled) { background: var(--color-paper-3); color: var(--color-text); }
+.gen-btn:disabled { opacity: 0.3; cursor: default; }
+.gen-label { font-size: 11px; color: var(--color-text-3); min-width: 36px; text-align: center; }
 
-.thinking {
-  display: flex;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-6);
-}
+.ctx-divider { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-6); user-select: none; }
+.ctx-divider-line { flex: 1; height: 1px; background: linear-gradient(90deg, transparent, oklch(0.65 0.15 25 / 0.4), transparent); }
+.ctx-divider-label { font-size: 10px; font-weight: 500; color: oklch(0.65 0.15 25 / 0.7); white-space: nowrap; letter-spacing: 0.05em; }
 
-.thinking-dots {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding-left: calc(28px + var(--space-4));
-}
-
-.thinking-dots span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-text-3);
-  animation: bounce 1.2s infinite ease-in-out;
-}
-
+.thinking { display: flex; gap: var(--space-4); padding: var(--space-4) var(--space-6); }
+.thinking-dots { display: flex; align-items: center; gap: 4px; padding-left: calc(28px + var(--space-4)); }
+.thinking-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--color-text-3); animation: bounce 1.2s infinite ease-in-out; }
 .thinking-dots span:nth-child(1) { animation-delay: 0s; }
 .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
 .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes bounce {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-6px); opacity: 1; }
-}
+@keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-6px); opacity: 1; } }
 </style>

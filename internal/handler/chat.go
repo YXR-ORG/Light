@@ -49,19 +49,21 @@ type Attachment struct {
 }
 
 type SendMessageRequest struct {
-	ConversationID  string       `json:"conversation_id"`
-	Content         string       `json:"content"`
-	Provider        string       `json:"provider"`
-	Model           string       `json:"model"`
-	AgentID         string       `json:"agent_id"`
-	MCPServerIDs    []string     `json:"mcp_server_ids"`
-	SkillIDs        []string     `json:"skill_ids"`
-	WebSearch       bool         `json:"web_search"`
-	IgnoreContext   bool         `json:"ignore_context"`
-	ContextCutoffID string       `json:"context_cutoff_id"`
-	Attachments     []Attachment `json:"attachments"`
-	Mode            string       `json:"mode"`            // "chat" | "knowledge"
-	KnowledgeBaseID string       `json:"knowledge_base_id"` // kb_id，mode=knowledge 时有效
+	ConversationID    string       `json:"conversation_id"`
+	Content           string       `json:"content"`
+	Provider          string       `json:"provider"`
+	Model             string       `json:"model"`
+	AgentID           string       `json:"agent_id"`
+	MCPServerIDs      []string     `json:"mcp_server_ids"`
+	SkillIDs          []string     `json:"skill_ids"`
+	WebSearch         bool         `json:"web_search"`
+	IgnoreContext     bool         `json:"ignore_context"`
+	ContextCutoffID   string       `json:"context_cutoff_id"`
+	Attachments       []Attachment `json:"attachments"`
+	Mode              string       `json:"mode"`
+	KnowledgeBaseID   string       `json:"knowledge_base_id"`
+	// 重新生成：传入已有 group id，后端在该 group 追加新版本
+	RegenerateGroupID string       `json:"regenerate_group_id"`
 }
 
 type SendMessageResponse struct {
@@ -344,7 +346,12 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 	}
 
 	mcpJSON, _ := json.Marshal(req.MCPServerIDs)
-	if _, err := storage.SaveMessage(req.ConversationID, "user", req.Content, "", "", "", req.AgentID, string(mcpJSON), attachmentsMeta); err != nil {		slog.Error("StreamChat save user message failed", "error", err)
+	// 重新生成时不保存新的 user 消息，直接用已有历史
+	isRegenerate := req.RegenerateGroupID != ""
+	if !isRegenerate {
+		if _, err := storage.SaveMessage(req.ConversationID, "user", req.Content, "", "", "", req.AgentID, string(mcpJSON), attachmentsMeta); err != nil {
+			slog.Error("StreamChat save user message failed", "error", err)
+		}
 	}
 
 	// Check if this is the first user message (for auto title generation)
@@ -353,7 +360,8 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 		isFirstMessage = len(prevMsgs) == 1
 	}
 
-	history, err := storage.GetMessages(req.ConversationID)
+	// 构建 einoMsgs 用最新版本（每个 group 只取 gen_index 最大的）
+	history, err := storage.GetLatestMessages(req.ConversationID)
 	if err != nil {
 		runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true, Error: err.Error()})
 		return err
@@ -419,10 +427,21 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 
 	fullContent, fullThinking := h.runToolLoop(ctx, einoMsgs)
 
-	// 只有非空回复才存库，空内容（API 失败/超时）不存，避免污染历史上下文
+	// 只有非空回复才存库
 	if fullContent != "" {
-		if _, err := storage.SaveMessage(req.ConversationID, "assistant", fullContent, fullThinking, "", "", "", ""); err != nil {
-			slog.Error("StreamChat save assistant message failed", "error", err)
+		if isRegenerate {
+			// 重新生成：查当前 group 的最大 gen_index，+1 追加新版本
+			var maxIdx int
+			storage.DB.Model(&storage.Message{}).
+				Where("conversation_id = ? AND generation_group_id = ?", req.ConversationID, req.RegenerateGroupID).
+				Select("COALESCE(MAX(gen_index), 0)").Scan(&maxIdx)
+			if _, err := storage.SaveRegeneratedMessage(req.ConversationID, fullContent, fullThinking, req.RegenerateGroupID, maxIdx+1); err != nil {
+				slog.Error("StreamChat save regenerated message failed", "error", err)
+			}
+		} else {
+			if _, err := storage.SaveMessage(req.ConversationID, "assistant", fullContent, fullThinking, "", "", "", ""); err != nil {
+				slog.Error("StreamChat save assistant message failed", "error", err)
+			}
 		}
 	} else {
 		slog.Warn("StreamChat: empty fullContent, skipping save", "conv_id", req.ConversationID)

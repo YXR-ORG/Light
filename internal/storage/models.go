@@ -23,17 +23,20 @@ type Conversation struct {
 type Message struct {
 	ID              string    `gorm:"primaryKey;size:36" json:"id"`
 	ConversationID  string    `gorm:"index;size:36;not null" json:"conversation_id"`
-	Role            string    `gorm:"size:16;not null" json:"role"`
-	Content         string    `gorm:"type:text" json:"content"`
-	Thinking        string    `gorm:"type:text" json:"thinking,omitempty"`
-	ToolCalls       string    `gorm:"type:text" json:"tool_calls,omitempty"`
-	ToolResult      string    `gorm:"type:text" json:"tool_result,omitempty"`
-	Attachments     string    `gorm:"type:text" json:"attachments,omitempty"` // JSON metadata only
-	AgentID         string    `gorm:"size:36;default:''" json:"agent_id"`
-	MCPServerIDs    string    `gorm:"type:text;default:''" json:"mcp_server_ids"`    // JSON []string snapshot
-	Mode            string    `gorm:"size:16;default:'chat'" json:"mode"`            // chat|knowledge
-	KnowledgeBaseID string    `gorm:"size:36;default:''" json:"knowledge_base_id"`   // kb_id snapshot
-	CreatedAt       time.Time `json:"created_at"`
+	Role              string    `gorm:"size:16;not null" json:"role"`
+	Content           string    `gorm:"type:text" json:"content"`
+	Thinking          string    `gorm:"type:text" json:"thinking,omitempty"`
+	ToolCalls         string    `gorm:"type:text" json:"tool_calls,omitempty"`
+	ToolResult        string    `gorm:"type:text" json:"tool_result,omitempty"`
+	Attachments       string    `gorm:"type:text" json:"attachments,omitempty"`
+	AgentID           string    `gorm:"size:36;default:''" json:"agent_id"`
+	MCPServerIDs      string    `gorm:"type:text;default:''" json:"mcp_server_ids"`
+	Mode              string    `gorm:"size:16;default:'chat'" json:"mode"`
+	KnowledgeBaseID   string    `gorm:"size:36;default:''" json:"knowledge_base_id"`
+	// 重新生成支持：同一 user prompt 的所有 AI 回答共享一个 group id
+	GenerationGroupID string    `gorm:"size:36;default:''" json:"generation_group_id"`
+	GenIndex          int       `gorm:"default:0" json:"gen_index"` // 0=初始，1=第一次重生成，依次递增
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type Setting struct {
