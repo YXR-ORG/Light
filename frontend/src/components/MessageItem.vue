@@ -18,13 +18,18 @@ marked.setOptions({
 const props = defineProps<{
   msg: storage.Message
   streaming?: boolean
-  thinking?: string   // 流式思考内容（streaming 时用）
+  thinking?: string
+  isLast?: boolean      // 是否是最后一条 assistant 消息
+}>()
+
+const emit = defineEmits<{
+  regenerate: []
 }>()
 
 const isUser = computed(() => props.msg.role === 'user')
-const thinkingOpen = ref(false)  // 历史消息默认折叠
+const thinkingOpen = ref(false)
+const copied = ref(false)
 
-// 流式时自动展开
 watch(() => props.streaming, (v) => { if (v) thinkingOpen.value = true })
 
 const content = computed(() => {
@@ -45,16 +50,22 @@ const renderedContent = computed(() => {
   return marked.parse(content.value || '') as string
 })
 
-// 思考内容：streaming 时用 prop，历史消息读 msg.thinking
 const thinkingText = computed(() => props.thinking || props.msg.thinking || '')
 const hasThinking = computed(() => !!thinkingText.value)
 
-// 附件元数据
 const attachmentMetas = computed(() => {
   if (!props.msg.attachments) return []
   try { return JSON.parse(props.msg.attachments) as { name: string; mime_type: string }[] }
   catch { return [] }
 })
+
+// 复制纯文本内容（去掉 tool_calls 部分）
+async function copyContent() {
+  const text = props.msg.content || ''
+  await navigator.clipboard.writeText(text).catch(() => {})
+  copied.value = true
+  setTimeout(() => { copied.value = false }, 2000)
+}
 </script>
 
 <template>
@@ -91,6 +102,19 @@ const attachmentMetas = computed(() => {
       <div class="msg-text" v-if="isUser" v-text="content || ''" />
       <div class="msg-text markdown-body" v-else v-html="renderedContent || ''" />
       <span v-if="props.streaming && !isUser" class="cursor" />
+
+      <!-- 操作按钮：最后一条 assistant 消息且非 streaming 时显示 -->
+      <div v-if="!isUser && isLast && !streaming" class="msg-actions">
+        <button class="msg-action-btn" :class="{ copied }" @click="copyContent" :title="copied ? '已复制' : '复制'">
+          <!-- 已复制：勾 -->
+          <svg v-if="copied" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          <!-- 复制图标 -->
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+        <button class="msg-action-btn" @click="emit('regenerate')" title="重新生成">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -283,4 +307,26 @@ const attachmentMetas = computed(() => {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
+
+/* 消息操作按钮 */
+.msg-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+}
+.msg-row:hover .msg-actions { opacity: 1; }
+
+.msg-action-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  border: none; background: transparent;
+  color: var(--color-text-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+.msg-action-btn:hover { background: var(--color-paper-3); color: var(--color-text); }
+.msg-action-btn.copied { color: var(--color-success); }
 </style>

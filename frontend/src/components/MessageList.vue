@@ -2,7 +2,9 @@
 import { useChatStore } from '../stores/chat'
 import MessageItem from './MessageItem.vue'
 import { storage as models } from '../../wailsjs/go/models'
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, computed } from 'vue'
+import { StreamChat } from '../../wailsjs/go/handler/ChatHandler'
+import type { storage } from '../../wailsjs/go/models'
 
 const store = useChatStore()
 const listRef = ref<HTMLElement | null>(null)
@@ -16,6 +18,53 @@ function makeStreamMsg(content: string) {
   m.content = content
   m.conversation_id = ''
   return m
+}
+
+// 最后一条 assistant 消息的 id（streaming 时不显示按钮）
+const lastAssistantId = computed(() => {
+  if (store.streaming) return null
+  for (let i = store.messages.length - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'assistant') return store.messages[i].id
+  }
+  return null
+})
+
+// 重新生成：找最后一条 user 消息重发
+async function handleRegenerate() {
+  if (store.streaming) return
+  const conv = store.conversations.find(c => c.id === store.currentConvId)
+  if (!conv || !store.currentConvId) return
+
+  // 找最后一条 user 消息
+  let lastUserMsg: storage.Message | null = null
+  for (let i = store.messages.length - 1; i >= 0; i--) {
+    if (store.messages[i].role === 'user') { lastUserMsg = store.messages[i]; break }
+  }
+  if (!lastUserMsg) return
+
+  store.resetStream()
+  store.setStreaming(true)
+
+  try {
+    await StreamChat({
+      conversation_id: store.currentConvId,
+      content: lastUserMsg.content,
+      provider: conv.provider,
+      model: conv.model,
+      agent_id: store.activeAgentId ?? '',
+      mcp_server_ids: [],
+      skill_ids: [],
+      web_search: false,
+      mode: (conv as any).mode || 'normal',
+      knowledge_base_id: (conv as any).knowledge_base_id || '',
+      ignore_context: false,
+      context_cutoff_id: store.contextCutoffId ?? '',
+      attachments: [],
+    } as any)
+  } catch (e: any) {
+    store.setStreaming(false)
+    store.appendStream(`\n\n⚠️ 重新生成失败：${e}`)
+  }
 }
 
 function isAtBottom(): boolean {
@@ -34,37 +83,16 @@ function scrollToBottom(force = false) {
 
 function onScroll() {
   if (!store.streaming) return
-  // 如果用户滚动到底部附近，视为"跟随"，恢复自动滚动
-  if (isAtBottom()) {
-    userScrolled = false
-    return
-  }
-  // 用户向上滚动，暂停自动滚动
+  if (isAtBottom()) { userScrolled = false; return }
   userScrolled = true
-  // 防抖：停止滚动 100ms 后才确认
   if (scrollTimer) clearTimeout(scrollTimer)
   scrollTimer = setTimeout(() => { scrollTimer = null }, 100)
 }
 
-// 新消息时强制滚到底（新对话/发送消息），同时重置 userScrolled
-watch(() => store.messages.length, () => {
-  userScrolled = false
-  scrollToBottom(true)
-})
-
-// 流式内容变化时，只有用户没有手动滚动才跟随
+watch(() => store.messages.length, () => { userScrolled = false; scrollToBottom(true) })
 watch(() => store.streamContent, () => scrollToBottom(false))
-
-// 流式结束时重置
-watch(() => store.streaming, (v) => {
-  if (!v) userScrolled = false
-})
-
-// 切换对话时强制滚到底
-watch(() => store.currentConvId, () => {
-  userScrolled = false
-  scrollToBottom(true)
-})
+watch(() => store.streaming, (v) => { if (!v) userScrolled = false })
+watch(() => store.currentConvId, () => { userScrolled = false; scrollToBottom(true) })
 </script>
 
 <template>
@@ -73,8 +101,11 @@ watch(() => store.currentConvId, () => {
       <p>发送一条消息开始对话</p>
     </div>
     <template v-for="(m, idx) in store.messages" :key="m.id">
-      <MessageItem :msg="m" />
-      <!-- context cutoff divider: shown after the cutoff message -->
+      <MessageItem
+        :msg="m"
+        :is-last="m.id === lastAssistantId"
+        @regenerate="handleRegenerate"
+      />
       <div v-if="store.contextCutoffId && m.id === store.contextCutoffId" class="ctx-divider">
         <span class="ctx-divider-line" />
         <span class="ctx-divider-label">上下文从此处清除</span>

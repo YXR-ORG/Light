@@ -16,4 +16,6 @@ export function ListProviders():Promise<Array<storage.LLMProvider>>;
 
 export function SaveProvider(arg1:storage.LLMProvider):Promise<storage.LLMProvider>;
 
+export function TestConnection(arg1:storage.LLMProvider):Promise<string>;
+
 export function ToggleProvider(arg1:string,arg2:boolean):Promise<void>;

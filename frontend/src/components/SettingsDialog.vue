@@ -5,7 +5,7 @@ import MCPConfig from './MCPConfig.vue'
 import KnowledgeConfig from './KnowledgeConfig.vue'
 import {
   ListProviders, SaveProvider, DeleteProvider, ToggleProvider,
-  ListModels, AddModel, DeleteModel,
+  ListModels, AddModel, DeleteModel, TestConnection,
 } from '../../wailsjs/go/handler/ProviderHandler'
 import { ListAgents, SaveAgent, DeleteAgent } from '../../wailsjs/go/handler/AgentHandler'
 import { ListSkills, SaveSkill, ToggleSkill, DeleteSkill, ImportSkillZip } from '../../wailsjs/go/handler/SkillHandler'
@@ -32,6 +32,25 @@ const selectedProviderID = ref<string | null>(null)
 const models = ref<storage.LLMModel[]>([])
 const newModelName = ref('')
 const saving = ref(false)
+const testConnState = ref<'idle' | 'loading' | 'ok' | 'fail'>('idle')
+const testConnMsg = ref('')
+
+async function doTestConnection() {
+  const p = editingProvider.value
+    ? { ...editingProvider.value, name: form.value.name, type: form.value.type, api_key: form.value.api_key, base_url: form.value.base_url }
+    : { id: '', name: form.value.name, type: form.value.type, api_key: form.value.api_key, base_url: form.value.base_url, enabled: true, created_at: '', updated_at: '' } as storage.LLMProvider
+  testConnState.value = 'loading'
+  testConnMsg.value = ''
+  const errMsg = await TestConnection(p as any).catch((e: any) => String(e))
+  if (!errMsg) {
+    testConnState.value = 'ok'
+    testConnMsg.value = '连接成功'
+  } else {
+    testConnState.value = 'fail'
+    testConnMsg.value = errMsg
+  }
+  setTimeout(() => { testConnState.value = 'idle'; testConnMsg.value = '' }, 4000)
+}
 const showProviderForm = ref(false)
 const editingProvider = ref<storage.LLMProvider | null>(null)
 const form = ref({ name: '', type: 'openai', api_key: '', base_url: '' })
@@ -148,6 +167,15 @@ async function deleteModel(id: string) {
 // ── Agents ──
 const agents = ref<storage.Agent[]>([])
 const showAgentForm = ref(false)
+const showEmojiPicker = ref(false)
+
+const AGENT_EMOJIS = [
+  '🤖','🧠','💡','🔬','📝','🎯','🚀','⚡','🌟','💎',
+  '🎨','🖥️','📊','🔧','🛠️','⚙️','🔍','📚','🗂️','📋',
+  '💼','🏆','🎓','🌐','🔐','🧪','🎭','🎵','📸','🌈',
+  '🦾','🧬','🤝','💬','📡','🛡️','⚗️','🎲','🧩','🔮',
+  '🐉','🦅','🐺','🦊','🐼','🦁','🐯','🦋','🌺','🍀',
+]
 const editingAgent = ref<storage.Agent | null>(null)
 const agentForm = ref({ name: '', icon: '🤖', description: '', system_prompt: '' })
 const agentSaving = ref(false)
@@ -717,6 +745,17 @@ function formatSize(bytes: number): string {
 
                 <div class="form-actions">
                   <button class="btn btn-cancel" @click="cancelProviderForm">取消</button>
+                  <!-- 测试连接按钮 -->
+                  <button class="btn btn-test" :disabled="testConnState === 'loading'" @click="doTestConnection" title="测试连接">
+                    <svg v-if="testConnState === 'loading'" class="spin-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                    <svg v-else-if="testConnState === 'ok'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg v-else-if="testConnState === 'fail'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1" fill="currentColor"/></svg>
+                    <span :class="testConnState === 'ok' ? 'test-ok' : testConnState === 'fail' ? 'test-fail' : ''">
+                      {{ testConnState === 'loading' ? '测试中…' : testConnState === 'ok' ? '成功' : testConnState === 'fail' ? '失败' : '测试' }}
+                    </span>
+                    <span v-if="testConnMsg && testConnState === 'fail'" class="test-msg" :title="testConnMsg">{{ testConnMsg.slice(0, 20) }}{{ testConnMsg.length > 20 ? '…' : '' }}</span>
+                  </button>
                   <button class="btn btn-primary" @click="saveProviderForm" :disabled="saving || !form.name.trim()">
                     {{ saving ? '保存中...' : '保存' }}
                   </button>
@@ -761,7 +800,20 @@ function formatSize(bytes: number): string {
                 <div class="form-fields">
                   <div class="field">
                     <label>图标 <span class="optional">Emoji</span></label>
-                    <input v-model="agentForm.icon" placeholder="🤖" style="width:80px" />
+                    <div class="emoji-field">
+                      <input v-model="agentForm.icon" placeholder="🤖" style="width:60px" />
+                      <button class="btn-emoji-pick" type="button" @click.stop="showEmojiPicker = !showEmojiPicker" title="选择图标">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9" stroke-width="3"/><line x1="15" y1="9" x2="15.01" y2="9" stroke-width="3"/></svg>
+                      </button>
+                      <div v-if="showEmojiPicker" class="emoji-picker" @click.stop>
+                        <button
+                          v-for="e in AGENT_EMOJIS" :key="e"
+                          class="emoji-option"
+                          :class="{ active: agentForm.icon === e }"
+                          @click="agentForm.icon = e; showEmojiPicker = false"
+                        >{{ e }}</button>
+                      </div>
+                    </div>
                   </div>
                   <div class="field">
                     <label>名称</label>
@@ -956,6 +1008,14 @@ function formatSize(bytes: number): string {
 .btn-primary { background: var(--color-accent); color: #fff; }
 .btn-primary:hover:not(:disabled) { background: var(--color-accent-2); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-test { display: flex; align-items: center; gap: 4px; background: var(--color-paper-3); color: var(--color-text-2); padding: var(--space-2) var(--space-3); }
+.btn-test:hover:not(:disabled) { background: var(--color-paper-4); color: var(--color-text); }
+.btn-test:disabled { opacity: 0.6; cursor: not-allowed; }
+.test-ok { color: var(--color-success); }
+.test-fail { color: oklch(0.55 0.18 25); }
+.test-msg { font-size: 10px; color: oklch(0.55 0.18 25); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin-icon { animation: spin 0.8s linear infinite; }
 .mcp-panel { height: 100%; }
 .knowledge-panel { height: 100%; overflow-y: auto; }
 
@@ -1054,4 +1114,13 @@ function formatSize(bytes: number): string {
 .agent-form { display: flex; flex-direction: column; gap: var(--space-4); overflow-y: auto; }
 .agent-prompt-textarea { width: 100%; padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: var(--text-sm); font-family: var(--font-mono); color: var(--color-text); background: var(--color-paper); outline: none; resize: vertical; box-sizing: border-box; line-height: 1.6; }
 .agent-prompt-textarea:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-soft); }
+
+/* emoji 选择器 */
+.emoji-field { display: flex; align-items: center; gap: var(--space-2); position: relative; }
+.btn-emoji-pick { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-paper-2); color: var(--color-text-2); cursor: pointer; flex-shrink: 0; }
+.btn-emoji-pick:hover { background: var(--color-paper-3); color: var(--color-text); }
+.emoji-picker { position: absolute; top: calc(100% + 4px); left: 0; z-index: 200; background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 4px 16px rgba(0,0,0,.12); padding: var(--space-2); display: flex; flex-wrap: wrap; gap: 2px; width: 260px; }
+.emoji-option { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; font-size: 18px; border: none; background: transparent; border-radius: var(--radius-sm); cursor: pointer; transition: background var(--duration-fast); }
+.emoji-option:hover { background: var(--color-paper-3); }
+.emoji-option.active { background: var(--color-accent-soft); }
 </style>

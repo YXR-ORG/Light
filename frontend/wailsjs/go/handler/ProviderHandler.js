@@ -30,6 +30,10 @@ export function SaveProvider(arg1) {
   return window['go']['handler']['ProviderHandler']['SaveProvider'](arg1);
 }
 
+export function TestConnection(arg1) {
+  return window['go']['handler']['ProviderHandler']['TestConnection'](arg1);
+}
+
 export function ToggleProvider(arg1, arg2) {
   return window['go']['handler']['ProviderHandler']['ToggleProvider'](arg1, arg2);
 }
