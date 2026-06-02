@@ -22,11 +22,17 @@ func modelDir() string {
 		return err == nil
 	}
 
-	// 1. app bundle: Contents/Resources/models/all-MiniLM-L6-v2（生产环境）
+	// 1. macOS app bundle: Contents/Resources/models/（生产环境）
 	exe, _ := os.Executable()
 	bundlePath := filepath.Join(filepath.Dir(exe), "..", "Resources", "models", modelName)
 	if check(bundlePath) {
 		return bundlePath
+	}
+
+	// 2. Windows / Linux：exe 同目录下的 models/（生产环境）
+	exeSiblingPath := filepath.Join(filepath.Dir(exe), "models", modelName)
+	if check(exeSiblingPath) {
+		return exeSiblingPath
 	}
 
 	// 2. 工作目录相对路径 build/models/（wails dev 和直接 go run 均适用）
