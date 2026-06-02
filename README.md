@@ -188,66 +188,13 @@ API Key 不会上传到任何服务器。
 
 **跨文档问题**（如"A 和 B 有什么共同点"）：AI 会自动分别搜索每个实体，再综合推理回答。
 
-## 知识库 TODO
-
-当前知识库基于 FTS5 全文检索（trigram tokenizer），能可靠处理中文任意子串匹配。以下三个方向是下一步的演进路径，按优先级排序：
-
-### TODO 1：文档摘要索引（短期，低成本）
-
-**问题**：FTS5 只能匹配关键词，无法理解"这篇文档讲的是什么"。文档量大时，模型需要多次搜索才能定位到正确文档。
-
-**方案**：文档上传时，用 LLM 生成每个文档的摘要（人物、主题、关键事件）和关键实体列表，存入 `summaries` 表。搜索时先搜摘要层定位文档，再搜 chunk 层取内容（两阶段检索）。
-
-```sql
-CREATE TABLE summaries (
-  doc_id TEXT PRIMARY KEY,
-  summary TEXT,        -- LLM 生成的文档摘要
-  key_entities TEXT,   -- JSON 数组，如 ["张嘎", "奶奶", "鬼子"]
-  created_at DATETIME
-);
-```
-
-**预期效果**：减少无效搜索轮次，跨文档问题定位更准确。
-
----
-
-### TODO 2：向量检索 + RRF 混合（中期，根本解决语义问题）
-
-**问题**：关键词检索无法理解语义。"勇敢的少年"和"机智的小鬼"语义相同，但 FTS5 找不到关联。这是当前架构的根本局限。
-
-**方案**：内嵌 `all-MiniLM-L6-v2` ONNX 模型（384 维，约 22MB），通过 `onnxruntime-go` 在本地运行，完全离线，无需 Ollama 或任何外部服务。
-
-1. 模型文件打包进 app bundle（`Contents/Resources/models/all-MiniLM-L6-v2.onnx`）
-2. 文档就绪后，后台异步向量化所有 chunks，写入已预留的 `vectors` 表
-3. 搜索时并行执行 FTS5（关键词）+ 向量相似度（语义）两路检索
-4. 用 **RRF（Reciprocal Rank Fusion）** 合并两路结果，取长补短
-
-```
-用户问题 → embedding → 向量相似度检索 ─┐
-                                        ├→ RRF 融合 → top-k chunks → LLM
-用户问题 → FTS5 关键词检索 ────────────┘
-```
-
-**已就绪**：`vectors` 表已预留（`embedding BLOB`），schema 不需要变更。待实现：`onnxruntime-go` 集成 + embedding pipeline + 向量相似度检索。
-
----
-
-### TODO 3：知识图谱 / 实体关系索引（长期，复杂场景）
-
-**问题**：文档间的实体关系（人物关系、事件因果、概念层级）无法被检索层感知。适合企业知识库、法律文档、医疗记录等有明确实体关系的场景。
-
-**方案**：
-1. 文档上传时，用 LLM 抽取实体和关系（`孙小仙 is_character_in 公平国往事`）
-2. 存入图结构（可用 SQLite 的邻接表模拟，无需引入图数据库）
-3. 查询时识别问题中的实体，图遍历找关联实体，结合向量检索召回相关 chunk
-
-**适用场景**：文档间有明确关联关系时（如人物关系谱、产品文档体系）。对创意推断类问题（"张嘎进入公平国会发生什么"）帮助有限，因为两个文档本来就没有关系，是用户在做跨文档创意推断。
-
 ---
 
 > 详细问题复盘见 [docs/KNOWLEDGE_BASE_POSTMORTEM.md](docs/KNOWLEDGE_BASE_POSTMORTEM.md)
 >
 > 完整实现技术文档见 [docs/KNOWLEDGE_BASE_IMPL.md](docs/KNOWLEDGE_BASE_IMPL.md)
+>
+> 功能规划与 TODO 见 [docs/TODO.md](docs/TODO.md)
 
 ## License
 
