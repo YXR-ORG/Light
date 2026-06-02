@@ -247,17 +247,29 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 
 	slog.Info("StreamChat start", "provider", req.Provider, "model", req.Model, "conv_id", req.ConversationID)
 
-	apiKey, _ := storage.GetSetting(fmt.Sprintf("%s_api_key", req.Provider))
-	baseURL, _ := storage.GetSetting(fmt.Sprintf("%s_base_url", req.Provider))
-	slog.Info("StreamChat settings", "provider", req.Provider, "has_key", apiKey != "", "base_url", baseURL)
+	// req.Provider 可能是 provider UUID（新格式）或 type 字符串（旧格式）
+	// 优先按 id 查 llm_providers 表，查不到再降级到旧的 settings key-value 表
+	var apiKey, baseURL, providerType string
+	if p, err := storage.GetProvider(req.Provider); err == nil {
+		// 新格式：按 UUID 找到 provider
+		apiKey = p.APIKey
+		baseURL = p.BaseURL
+		providerType = p.Type
+	} else {
+		// 旧格式兼容：req.Provider 是 type 字符串（openai/claude/...）
+		providerType = req.Provider
+		apiKey, _ = storage.GetSetting(fmt.Sprintf("%s_api_key", req.Provider))
+		baseURL, _ = storage.GetSetting(fmt.Sprintf("%s_base_url", req.Provider))
+	}
+	slog.Info("StreamChat settings", "provider_type", providerType, "has_key", apiKey != "", "base_url", baseURL)
 
-	if req.Provider != "ollama" && apiKey == "" {
+	if providerType != "ollama" && apiKey == "" {
 		err := fmt.Errorf("请先在设置中配置 %s 的 API Key", req.Provider)
 		runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true, Error: err.Error()})
 		return err
 	}
 
-	if err := h.chat.Configure(req.Provider, req.Model, apiKey, baseURL); err != nil {
+	if err := h.chat.Configure(providerType, req.Model, apiKey, baseURL); err != nil {
 		runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true, Error: err.Error()})
 		return err
 	}

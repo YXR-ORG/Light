@@ -181,10 +181,9 @@ const currentModel = computed(() => currentConv.value?.model || '')
 
 const modelLabel = computed(() => {
   if (!currentModel.value) return '选择模型'
-  const p = providerMap.value[Object.keys(providerMap.value).find(id => providerMap.value[id].id === currentProvider.value) ?? '']
-  // currentProvider 存的是 provider type（如 openai），找匹配的 provider name
-  const matchedProvider = Object.values(providerMap.value).find(p => p.type === currentProvider.value || p.id === currentProvider.value)
-  return matchedProvider ? `${matchedProvider.name} · ${currentModel.value}` : currentModel.value
+  // currentProvider 存的是 provider.id（UUID）
+  const p = providerMap.value[currentProvider.value]
+  return p ? `${p.name} · ${currentModel.value}` : currentModel.value
 })
 
 const activeSkillLabel = computed(() => {
@@ -196,8 +195,9 @@ async function selectModel(provider: storage.LLMProvider, modelName: string) {
   if (!store.currentConvId) return
   showModelPicker.value = false
   const conv = store.conversations.find(c => c.id === store.currentConvId)
-  if (conv) { conv.provider = provider.type; conv.model = modelName }
-  await SetModel(store.currentConvId, provider.type, modelName).catch(console.error)
+  // 存 provider.id（UUID），不存 type，避免多个同类 provider 无法区分
+  if (conv) { conv.provider = provider.id; conv.model = modelName }
+  await SetModel(store.currentConvId, provider.id, modelName).catch(console.error)
 }
 
 function toggleModelPicker() {
@@ -253,17 +253,20 @@ async function send() {
   const text = input.value.trim()
   if (!text || !store.currentConvId) return
 
-  const provider = currentProvider.value || 'openai'
+  // currentProvider 存的是 provider.id（UUID），从 providerMap 取完整 provider 对象
+  const providerID = currentProvider.value
+  const providerObj = providerMap.value[providerID]
 
-  if (provider !== 'ollama') {
-    const hasKey = await Get(`${provider}_api_key`).catch(() => '') || ''
-    // 也检查新的 provider 表里的 api_key
-    const matchedProvider = Object.values(providerMap.value).find(p => p.type === provider)
-    if (!hasKey && !matchedProvider?.api_key) {
-      store.resetStream()
-      store.appendStream(`⚠️ 请先在「设置」中配置 ${provider.toUpperCase()} 的 API Key，然后重试。`)
-      return
-    }
+  if (!providerObj) {
+    store.resetStream()
+    store.appendStream('⚠️ 请先在输入框右下角选择模型供应商')
+    return
+  }
+
+  if (providerObj.type !== 'ollama' && !providerObj.api_key) {
+    store.resetStream()
+    store.appendStream(`⚠️ 请先在「设置」中配置 ${providerObj.name} 的 API Key，然后重试。`)
+    return
   }
 
   // 有图片附件时检查模型是否支持 vision
@@ -313,7 +316,7 @@ async function send() {
     await StreamChat(handlerModels.SendMessageRequest.createFrom({
       conversation_id: store.currentConvId,
       content: text,
-      provider,
+      provider: providerID,    // provider.id（UUID），后端按 id 查 llm_providers 表
       model: currentModel.value || 'gpt-4o',
       agent_id: store.activeAgentId ?? '',
       mcp_server_ids: selectedMCPIDs.value,
@@ -364,7 +367,7 @@ function onKeydown(e: KeyboardEvent) {
             v-for="m in g.models"
             :key="m.id"
             class="model-option"
-            :class="{ active: currentProvider === g.provider.type && currentModel === m.name }"
+            :class="{ active: currentProvider === g.provider.id && currentModel === m.name }"
             @click="selectModel(g.provider, m.name)"
           >{{ m.name }}</button>
         </div>
