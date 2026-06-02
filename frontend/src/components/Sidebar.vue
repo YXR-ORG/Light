@@ -205,7 +205,10 @@ async function newChat() {
     <!-- 智能体下拉选择器 -->
     <div v-if="agents.length > 0" class="agent-select-wrap" ref="agentSelectRef">
       <button class="agent-select-btn" @click="showAgentDropdown = !showAgentDropdown">
-        <span class="agent-select-icon">{{ activeAgent?.icon ?? '🤖' }}</span>
+        <span class="agent-select-icon">
+          <template v-if="activeAgent">{{ activeAgent.icon }}</template>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        </span>
         <span class="agent-select-name">{{ activeAgent?.name ?? '选择智能体' }}</span>
         <svg class="agent-select-arrow" :class="{ open: showAgentDropdown }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
