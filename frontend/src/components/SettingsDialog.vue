@@ -101,7 +101,7 @@ async function saveProviderForm() {
   try {
     const p = editingProvider.value
       ? { ...editingProvider.value, name: form.value.name, type: form.value.type, api_key: form.value.api_key, base_url: form.value.base_url }
-      : { id: '', name: form.value.name, type: form.value.type, api_key: form.value.api_key, base_url: form.value.base_url, enabled: false, created_at: '', updated_at: '' } as storage.LLMProvider
+      : { id: '', name: form.value.name, type: form.value.type, api_key: form.value.api_key, base_url: form.value.base_url, enabled: true, created_at: '', updated_at: '' } as storage.LLMProvider
     console.log('[saveProvider] sending:', JSON.stringify(p))
     const saved = await SaveProvider(p)
     console.log('[saveProvider] saved:', JSON.stringify(saved))
