@@ -79,6 +79,7 @@ func getEmbedder() (*pipelines.FeatureExtractionPipeline, error) {
 			return
 		}
 		p, err := hugot.NewPipeline(sess, hugot.FeatureExtractionConfig{
+			Name:      "all-MiniLM-L6-v2",
 			ModelPath: dir,
 		})
 		if err != nil {

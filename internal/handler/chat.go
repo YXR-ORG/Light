@@ -582,6 +582,13 @@ func (h *ChatHandler) runToolLoop(ctx context.Context, messages []*schema.Messag
 		slog.Info("runToolLoop iteration", "loop", loopCount, "tool_calls", len(toolCalls), "content_len", len(chunkContent))
 
 		if len(toolCalls) == 0 {
+			// LLM 返回了空内容且无 tool call（网络抖动或 API 异常）
+			if len(chunkContent) == 0 && loopCount == 0 {
+				slog.Warn("runToolLoop: empty response from LLM on first iteration")
+				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{
+					Content: "（模型返回了空响应，请重试）",
+				})
+			}
 			break
 		}
 
