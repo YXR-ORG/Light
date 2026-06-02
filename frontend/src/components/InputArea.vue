@@ -112,6 +112,8 @@ async function loadEnabledModels() {
   ])
   enabledModels.value = models
   providerMap.value = Object.fromEntries(providers.map(p => [p.id, p]))
+  // 同步到全局 store，供 ChatView 等其他组件使用
+  store.setProviderMap(Object.fromEntries(providers.map(p => [p.id, p.name])))
 }
 
 async function loadSkills() {

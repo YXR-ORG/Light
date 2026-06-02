@@ -12,7 +12,7 @@ const store = useChatStore()
       <div class="chat-header-info">
         <span class="chat-header-title">{{ store.conversations.find(c => c.id === store.currentConvId)?.title || '对话' }}</span>
         <span class="chat-header-model" v-if="store.conversations.find(c => c.id === store.currentConvId) as any">
-          {{ (store.conversations.find(c => c.id === store.currentConvId) as any)?.provider }} · {{ (store.conversations.find(c => c.id === store.currentConvId) as any)?.model }}
+          {{ store.providerMap[(store.conversations.find(c => c.id === store.currentConvId) as any)?.provider] || (store.conversations.find(c => c.id === store.currentConvId) as any)?.provider }} · {{ (store.conversations.find(c => c.id === store.currentConvId) as any)?.model }}
         </span>
       </div>
     </div>

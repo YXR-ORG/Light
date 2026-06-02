@@ -17,6 +17,12 @@ export const useChatStore = defineStore('chat', () => {
   // ID of the last message BEFORE the context cutoff (null = no cutoff)
   const contextCutoffId = ref<string | null>(null)
   const activeAgentId = ref<string | null>(null)
+  // providers id→name 映射，由 InputArea 加载后写入，供所有组件使用
+  const providerMap = ref<Record<string, string>>({})
+
+  function setProviderMap(map: Record<string, string>) {
+    providerMap.value = map
+  }
 
   let pendingQueue = ''
   let timerId: ReturnType<typeof setInterval> | null = null
@@ -114,9 +120,9 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     conversations, currentConvId, messages, streaming, streamContent, streamThinking,
-    contextCutoffId, activeAgentId,
+    contextCutoffId, activeAgentId, providerMap,
     setConversations, setCurrentConv, setMessages, appendMessage,
     setStreaming, appendStream, appendThinking, finishStream, resetStream,
-    toggleContextCutoff, setActiveAgent,
+    toggleContextCutoff, setActiveAgent, setProviderMap,
   }
 })
