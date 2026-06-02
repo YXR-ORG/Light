@@ -4,7 +4,6 @@ import { useChatStore } from '../stores/chat'
 import { useSettingsStore } from '../stores/settings'
 import { useThemeStore } from '../stores/theme'
 import ConversationItem from './ConversationItem.vue'
-import FavoritesDialog from './FavoritesDialog.vue'
 import { Create, Delete, List, Search, GetMessages, Rename, ToggleFavorite } from '../../wailsjs/go/handler/ConversationHandler'
 import { Get } from '../../wailsjs/go/handler/SettingsHandler'
 import { ListProviders } from '../../wailsjs/go/handler/ProviderHandler'
@@ -17,7 +16,6 @@ const store = useChatStore()
 const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
 
-const themeIcon = computed(() => themeStore.mode)
 const themeTitle = computed(() => ({
   light: '浅色模式（点击切换）',
   dark: '深色模式（点击切换）',
@@ -25,17 +23,25 @@ const themeTitle = computed(() => ({
 }[themeStore.mode]))
 
 const searchQuery = ref('')
+const convTab = ref<'all' | 'starred'>('all')
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let unsubConvUpdated: (() => void) | null = null
 
 const agents = ref<storage.Agent[]>([])
 const showAgentDropdown = ref(false)
 const agentSelectRef = ref<HTMLElement | null>(null)
-const showFavorites = ref(false)
 
 const activeAgent = computed(() =>
   agents.value.find(a => a.id === store.activeAgentId) ?? null
 )
+
+// 按 tab 过滤展示列表
+const visibleConvs = computed(() => {
+  if (convTab.value === 'starred') {
+    return store.conversations.filter(c => c.starred)
+  }
+  return store.conversations
+})
 
 onMounted(() => {
   loadConversations()
@@ -219,9 +225,18 @@ async function newChat() {
         </div>
       </transition>
     </div>
+    <!-- 全部 / 收藏 tab -->
+    <div class="conv-tabs">
+      <button class="conv-tab" :class="{ active: convTab === 'all' }" @click="convTab = 'all'">全部</button>
+      <button class="conv-tab" :class="{ active: convTab === 'starred' }" @click="convTab = 'starred'">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        收藏
+      </button>
+    </div>
+
     <div class="conv-list">
       <ConversationItem
-        v-for="c in store.conversations" :key="c.id"
+        v-for="c in visibleConvs" :key="c.id"
         :conv="c" :active="c.id === store.currentConvId"
         :highlight="searchQuery"
         @select="selectConv"
@@ -229,18 +244,14 @@ async function newChat() {
         @rename="renameConv"
         @toggle-favorite="toggleFavorite"
       />
-      <div v-if="!store.conversations.length" class="empty-list">
-        {{ searchQuery ? '无匹配对话' : '暂无对话' }}
+      <div v-if="!visibleConvs.length" class="empty-list">
+        {{ convTab === 'starred' ? '还没有收藏的对话' : searchQuery ? '无匹配对话' : '暂无对话' }}
       </div>
     </div>
     <div class="sidebar-footer">
       <button class="btn-settings" @click="settingsStore.setOpen(true)">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" stroke="currentColor" stroke-width="1.3"/><path d="M13.5 8a5.5 5.5 0 0 1-.1 1l1.5 1.2-1.3 2.3-1.8-.4a5.5 5.5 0 0 1-1.8 1L9.5 15h-3l-.5-1.9a5.5 5.5 0 0 1-1.8-1l-1.8.4L1 10.2 2.6 9A5.5 5.5 0 0 1 2.5 8c0-.34.03-.67.1-1L1 5.8l1.3-2.3 1.8.4a5.5 5.5 0 0 1 1.8-1L6.5 1h3l.5 1.9a5.5 5.5 0 0 1 1.8 1l1.8-.4L15 5.8 13.4 7c.07.33.1.66.1 1Z" stroke="currentColor" stroke-width="1.3"/></svg>
         设置
-      </button>
-      <!-- 收藏夹入口 -->
-      <button class="btn-icon" @click="showFavorites = true" title="我的收藏">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
       </button>
       <button class="btn-icon" @click="themeStore.toggle()" :title="themeTitle">
         <svg v-if="themeStore.mode === 'light'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
@@ -249,13 +260,6 @@ async function newChat() {
       </button>
     </div>
   </aside>
-
-  <!-- 收藏夹弹窗 -->
-  <FavoritesDialog
-    v-if="showFavorites"
-    @close="showFavorites = false"
-    @select="(id) => { selectConv(id); showFavorites = false }"
-  />
 </template>
 
 <style scoped>
@@ -374,6 +378,31 @@ async function newChat() {
 .search-clear:hover {
   background: var(--color-paper-4);
   color: var(--color-text);
+}
+
+/* ── 对话 tab 切换 ── */
+.conv-tabs {
+  display: flex;
+  gap: 2px;
+  margin: var(--space-1) var(--space-3) var(--space-1);
+  flex-shrink: 0;
+}
+.conv-tab {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  padding: var(--space-1) var(--space-2);
+  border: none; background: transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs); font-weight: 500;
+  color: var(--color-text-3);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+  font-family: var(--font-body);
+}
+.conv-tab:hover { background: var(--color-paper-3); color: var(--color-text-2); }
+.conv-tab.active {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
 }
 
 .conv-list {

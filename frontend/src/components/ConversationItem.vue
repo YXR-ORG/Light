@@ -18,13 +18,15 @@ const emit = defineEmits<{
 // ── 右键菜单 ─────────────────────────────────────────────────────────
 const ctxMenu = ref<{ x: number; y: number } | null>(null)
 const ctxRef = ref<HTMLElement | null>(null)
+// 删除二次确认状态
+const confirmDelete = ref(false)
 
 function onContextMenu(e: MouseEvent) {
   e.preventDefault()
+  confirmDelete.value = false
   ctxMenu.value = { x: e.clientX, y: e.clientY }
   nextTick(() => {
     if (ctxRef.value) {
-      // 防止超出底部
       const el = ctxRef.value
       const vh = window.innerHeight
       if (ctxMenu.value && ctxMenu.value.y + el.offsetHeight > vh) {
@@ -37,6 +39,20 @@ function onContextMenu(e: MouseEvent) {
 
 function closeCtx() {
   ctxMenu.value = null
+  confirmDelete.value = false
+}
+
+function requestDelete() {
+  // 第一次点删除：展开确认
+  confirmDelete.value = true
+  // 重新挂 close 监听，防止前一个 once 已消耗
+  document.addEventListener('mousedown', closeCtx, { once: true })
+}
+
+function confirmDeleteNow(e: MouseEvent) {
+  e.stopPropagation()
+  closeCtx()
+  emit('delete', props.conv.id)
 }
 
 // ── 重命名（内联编辑）────────────────────────────────────────────────
@@ -56,30 +72,19 @@ function startRename() {
 
 function commitRename() {
   const v = renameValue.value.trim()
-  if (v && v !== props.conv.title) {
-    emit('rename', props.conv.id, v)
-  }
+  if (v && v !== props.conv.title) emit('rename', props.conv.id, v)
   renaming.value = false
 }
 
-function cancelRename() {
-  renaming.value = false
-}
+function cancelRename() { renaming.value = false }
 
 // ── 其他操作 ─────────────────────────────────────────────────────────
-function onClick() {
-  if (!renaming.value) emit('select', props.conv.id)
-}
+function onClick() { if (!renaming.value) emit('select', props.conv.id) }
 
 function onDelete(e: MouseEvent) {
   e.stopPropagation()
   closeCtx()
   emit('delete', props.conv.id)
-}
-
-function onToggleFavorite(e: MouseEvent) {
-  e.stopPropagation()
-  emit('toggleFavorite', props.conv.id)
 }
 
 // ── 高亮搜索词 ───────────────────────────────────────────────────────
@@ -108,11 +113,15 @@ function escapeHtml(s: string) {
     @click="onClick"
     @contextmenu.prevent="onContextMenu"
   >
+    <!-- 已收藏：星标常驻在图标右上角 -->
     <div class="conv-icon">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <span v-if="conv.starred" class="star-badge">
+        <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+      </span>
     </div>
+
     <div class="conv-body">
-      <!-- 内联重命名 input -->
       <input
         v-if="renaming"
         ref="renameInput"
@@ -128,25 +137,10 @@ function escapeHtml(s: string) {
       <div class="conv-meta">{{ conv.provider }} · {{ conv.model }}</div>
     </div>
 
-    <!-- hover 操作区：收藏 + 删除 -->
-    <div class="conv-actions" @click.stop>
-      <!-- 收藏图标 -->
-      <button
-        class="btn-action"
-        :class="{ starred: conv.starred }"
-        @click="onToggleFavorite"
-        :title="conv.starred ? '取消收藏' : '收藏'"
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <polygon v-if="conv.starred" points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" fill="currentColor"/>
-          <polygon v-else points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-        </svg>
-      </button>
-      <!-- 删除图标 -->
-      <button class="btn-action btn-delete" @click="onDelete" title="删除">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-      </button>
-    </div>
+    <!-- hover 操作区：只有删除 -->
+    <button class="btn-delete" @click.stop="onDelete" title="删除">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
   </div>
 
   <!-- 右键菜单 -->
@@ -167,10 +161,21 @@ function escapeHtml(s: string) {
         {{ conv.starred ? '取消收藏' : '收藏' }}
       </button>
       <div class="ctx-divider" />
-      <button class="ctx-item danger" @click="onDelete($event)">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-        删除
-      </button>
+
+      <!-- 删除：两步确认 -->
+      <template v-if="!confirmDelete">
+        <button class="ctx-item danger" @click.stop="requestDelete">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          删除
+        </button>
+      </template>
+      <template v-else>
+        <div class="ctx-confirm-label">确认删除？</div>
+        <div class="ctx-confirm-btns">
+          <button class="ctx-confirm-yes" @click="confirmDeleteNow">删除</button>
+          <button class="ctx-confirm-no" @click.stop="confirmDelete = false">取消</button>
+        </div>
+      </template>
     </div>
   </Teleport>
 </template>
@@ -186,10 +191,10 @@ function escapeHtml(s: string) {
   transition: background var(--duration-fast) var(--ease-out);
   position: relative;
 }
-
 .conv-item:hover { background: var(--color-sidebar-hover); }
 .conv-item.active { background: var(--color-hover); }
 
+/* 图标 + 收藏星标角标 */
 .conv-icon {
   flex-shrink: 0;
   width: 32px; height: 32px;
@@ -197,11 +202,22 @@ function escapeHtml(s: string) {
   border-radius: var(--radius-md);
   background: var(--color-paper-3);
   color: var(--color-text-2);
+  position: relative;
 }
 .conv-item.active .conv-icon {
   background: var(--color-accent-soft);
   color: var(--color-accent);
 }
+.star-badge {
+  position: absolute;
+  bottom: -2px; right: -2px;
+  width: 13px; height: 13px;
+  background: var(--color-sidebar);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: oklch(0.78 0.18 75);
+}
+.conv-item.active .star-badge { background: var(--color-hover); }
 
 .conv-body { flex: 1; min-width: 0; }
 
@@ -210,77 +226,41 @@ function escapeHtml(s: string) {
   line-height: var(--leading-tight);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.conv-meta { font-size: var(--text-xs); color: var(--color-text-3); margin-top: 2px; }
 
-.conv-meta {
-  font-size: var(--text-xs); color: var(--color-text-3); margin-top: 2px;
-}
-
-/* 内联重命名 */
 .rename-input {
-  width: 100%;
-  font-size: var(--text-sm);
-  font-weight: 500;
+  width: 100%; font-size: var(--text-sm); font-weight: 500;
   line-height: var(--leading-tight);
-  background: var(--color-paper);
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius-sm);
-  padding: 1px var(--space-1);
-  color: var(--color-text);
-  font-family: var(--font-body);
-  outline: none;
+  background: var(--color-paper); border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm); padding: 1px var(--space-1);
+  color: var(--color-text); font-family: var(--font-body); outline: none;
 }
 
-/* hover 操作区 */
-.conv-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+/* 删除按钮：hover 才显示 */
+.btn-delete {
   opacity: 0;
-  transition: opacity var(--duration-fast);
   flex-shrink: 0;
-}
-.conv-item:hover .conv-actions { opacity: 1; }
-
-.btn-action {
   display: flex; align-items: center; justify-content: center;
   width: 22px; height: 22px;
   border: none; background: transparent;
   color: var(--color-text-3);
   border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--duration-fast), color var(--duration-fast);
-  padding: 0;
+  cursor: pointer; padding: 0;
+  transition: opacity var(--duration-fast), background var(--duration-fast), color var(--duration-fast);
 }
-.btn-action:hover { background: var(--color-paper-4); color: var(--color-text); }
-.btn-action.starred { color: oklch(0.78 0.18 75); opacity: 1; }
-.btn-action.starred:hover { color: oklch(0.65 0.18 75); }
-.btn-delete:hover { color: var(--color-danger); }
-
-/* 让收藏按钮常驻显示（收藏状态时不隐藏） */
-.conv-item:not(:hover) .btn-action.starred {
-  opacity: 1;
-}
-/* 未收藏时 hover 才显示，已收藏常驻 */
-.conv-item:not(:hover) .conv-actions .btn-action:not(.starred) {
-  opacity: 0;
-}
-/* 整体 conv-actions 收藏时也常驻 */
-.conv-item:not(:hover) .conv-actions:has(.btn-action.starred) {
-  opacity: 1;
-}
+.conv-item:hover .btn-delete { opacity: 1; }
+.btn-delete:hover { background: var(--color-paper-4); color: var(--color-danger); }
 
 .conv-title :deep(mark) {
   background: var(--color-accent-soft);
   color: var(--color-accent-2);
-  border-radius: 2px;
-  padding: 0 1px;
+  border-radius: 2px; padding: 0 1px;
 }
 
 /* ── 右键菜单 ── */
 .ctx-menu {
-  position: fixed;
-  z-index: 9999;
-  min-width: 148px;
+  position: fixed; z-index: 9999;
+  min-width: 152px;
   background: var(--color-paper);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -288,22 +268,46 @@ function escapeHtml(s: string) {
   padding: var(--space-1);
   display: flex; flex-direction: column; gap: 1px;
 }
-
 .ctx-item {
   display: flex; align-items: center; gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border: none; background: transparent;
-  color: var(--color-text-2);
-  font-size: var(--text-sm);
-  font-family: var(--font-body);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  width: 100%; text-align: left;
+  color: var(--color-text-2); font-size: var(--text-sm);
+  font-family: var(--font-body); border-radius: var(--radius-md);
+  cursor: pointer; width: 100%; text-align: left;
   transition: background var(--duration-fast), color var(--duration-fast);
 }
 .ctx-item:hover { background: var(--color-paper-3); color: var(--color-text); }
 .ctx-item.danger { color: var(--color-danger); }
 .ctx-item.danger:hover { background: oklch(0.96 0.02 25); }
-
 .ctx-divider { height: 1px; background: var(--color-border); margin: var(--space-1) 0; }
+
+/* 二次确认 */
+.ctx-confirm-label {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-danger);
+  font-weight: 500;
+}
+.ctx-confirm-btns {
+  display: flex; gap: var(--space-1); padding: 0 var(--space-1) var(--space-1);
+}
+.ctx-confirm-yes {
+  flex: 1; padding: var(--space-1) 0;
+  background: var(--color-danger); color: #fff;
+  border: none; border-radius: var(--radius-md);
+  font-size: var(--text-xs); font-family: var(--font-body);
+  cursor: pointer; font-weight: 500;
+  transition: opacity var(--duration-fast);
+}
+.ctx-confirm-yes:hover { opacity: 0.85; }
+.ctx-confirm-no {
+  flex: 1; padding: var(--space-1) 0;
+  background: var(--color-paper-3); color: var(--color-text-2);
+  border: none; border-radius: var(--radius-md);
+  font-size: var(--text-xs); font-family: var(--font-body);
+  cursor: pointer;
+  transition: background var(--duration-fast);
+}
+.ctx-confirm-no:hover { background: var(--color-paper-4); }
 </style>
