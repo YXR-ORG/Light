@@ -10,6 +10,9 @@ const listRef = ref<HTMLElement | null>(null)
 let userScrolled = false
 let scrollTimer: ReturnType<typeof setTimeout> | null = null
 
+// 正在重新生成的 groupID（决定在哪里内联显示流式内容）
+const regenGroupId = ref<string | null>(null)
+
 function makeStreamMsg(content: string) {
   const m = new models.Message({})
   m.id = 'streaming'
@@ -20,14 +23,12 @@ function makeStreamMsg(content: string) {
 }
 
 // ── generation group 版本切换 ──────────────────────────────────────
-// activeGenIndex[groupID] = 当前展示的版本索引（-1 = 最新）
 const activeGenIndex = ref<Record<string, number>>({})
 
-// 把消息列表转成渲染序列：同一 group 的 assistant 消息只展示选中版本
 interface DisplayMsg {
   msg: storage.Message
-  groupVersions: storage.Message[] // 该 group 的所有版本（仅 assistant 多版本时有值）
-  isLastAssistant: boolean
+  groupVersions: storage.Message[]
+  groupID: string
 }
 
 const displayMessages = computed((): DisplayMsg[] => {
@@ -51,34 +52,22 @@ const displayMessages = computed((): DisplayMsg[] => {
 
   for (const gid of groupOrder) {
     const group = groupMap.get(gid)!
-    // 非 assistant 消息（user/tool）直接展示
     if (group[0].role !== 'assistant') {
       for (const m of group) {
-        result.push({ msg: m, groupVersions: [], isLastAssistant: false })
+        result.push({ msg: m, groupVersions: [], groupID: gid })
       }
       continue
     }
 
-    // assistant 消息：按 gen_index 升序排列
     const sorted = [...group].sort((a, b) => (a.gen_index ?? 0) - (b.gen_index ?? 0))
-
-    // 当前展示索引（默认最新）
     let idx = activeGenIndex.value[gid] ?? (sorted.length - 1)
     if (idx >= sorted.length) idx = sorted.length - 1
 
     result.push({
       msg: sorted[idx],
       groupVersions: sorted.length > 1 ? sorted : [],
-      isLastAssistant: false, // 先占位，后面填
+      groupID: gid,
     })
-  }
-
-  // 标记最后一条 assistant
-  for (let i = result.length - 1; i >= 0; i--) {
-    if (result[i].msg.role === 'assistant') {
-      result[i] = { ...result[i], isLastAssistant: true }
-      break
-    }
   }
 
   return result
@@ -96,17 +85,24 @@ function currentVersionLabel(groupID: string, versions: storage.Message[]) {
 }
 
 // ── 重新生成 ─────────────────────────────────────────────────────────
-async function handleRegenerate(groupID: string) {
+async function handleRegenerate(groupID: string, displayIndex: number) {
   if (store.streaming) return
   const conv = store.conversations.find(c => c.id === store.currentConvId)
   if (!conv || !store.currentConvId) return
 
+  // 找该 group 前面最近的 user 消息（不是全局最后一条）
   let lastUserMsg: storage.Message | null = null
-  for (let i = store.messages.length - 1; i >= 0; i--) {
-    if (store.messages[i].role === 'user') { lastUserMsg = store.messages[i]; break }
+  for (let i = displayIndex - 1; i >= 0; i--) {
+    if (displayMessages.value[i].msg.role === 'user') {
+      lastUserMsg = displayMessages.value[i].msg
+      break
+    }
   }
   if (!lastUserMsg) return
 
+  // 标记当前 regenGroupId，流式内容将内联渲染在该位置
+  regenGroupId.value = groupID
+  // 切换到最新版本（视觉上"切换"到正在生成的位置）
   store.resetStream()
   store.setStreaming(true)
 
@@ -125,13 +121,30 @@ async function handleRegenerate(groupID: string) {
       ignore_context: false,
       context_cutoff_id: store.contextCutoffId ?? '',
       attachments: [],
-      regenerate_group_id: groupID, // 告诉后端归入哪个 group
+      regenerate_group_id: groupID,
     } as any)
   } catch (e: any) {
     store.setStreaming(false)
     store.appendStream(`\n\n⚠️ 重新生成失败：${e}`)
   }
 }
+
+// 流结束后清除 regenGroupId，并自动把版本切到最新
+watch(() => store.streaming, (v) => {
+  if (!v && regenGroupId.value) {
+    // 等 messages 刷新后切到最新版
+    nextTick(() => {
+      if (regenGroupId.value) {
+        const gid = regenGroupId.value
+        const msgs = store.messages
+        const versionsOfGroup = msgs.filter(m => (m.generation_group_id || m.id) === gid)
+        const maxIdx = versionsOfGroup.length - 1
+        activeGenIndex.value = { ...activeGenIndex.value, [gid]: maxIdx }
+        regenGroupId.value = null
+      }
+    })
+  }
+})
 
 // ── 滚动控制 ─────────────────────────────────────────────────────────
 function isAtBottom(): boolean {
@@ -157,50 +170,67 @@ function onScroll() {
 }
 
 watch(() => store.messages.length, () => { userScrolled = false; scrollToBottom(true) })
-watch(() => store.streamContent, () => scrollToBottom(false))
-watch(() => store.streaming, (v) => { if (!v) userScrolled = false })
+watch(() => store.streamContent, () => {
+  // 只有底部追加模式（普通对话）才自动滚动
+  if (!regenGroupId.value) scrollToBottom(false)
+})
 watch(() => store.currentConvId, () => {
   userScrolled = false
   activeGenIndex.value = {}
+  regenGroupId.value = null
   scrollToBottom(true)
 })
 </script>
 
 <template>
   <div class="message-list" ref="listRef" @scroll.passive="onScroll">
-    <div v-if="!store.messages.length && !store.streamContent" class="msg-hint">
+    <div v-if="!store.messages.length && !store.streamContent && !store.streaming" class="msg-hint">
       <p>发送一条消息开始对话</p>
     </div>
 
-    <template v-for="(item, idx) in displayMessages" :key="item.msg.id">
-      <MessageItem
-        :msg="item.msg"
-        :is-last="item.isLastAssistant"
-        :show-actions="item.msg.role === 'assistant'"
-        @regenerate="handleRegenerate(item.msg.generation_group_id || item.msg.id)"
-      />
+    <template v-for="(item, idx) in displayMessages" :key="item.msg.id + '-' + item.groupID">
 
-      <!-- 多版本切换条 -->
-      <div
-        v-if="item.groupVersions.length > 1"
-        class="gen-switcher"
-      >
-        <button
-          class="gen-btn"
-          :disabled="(activeGenIndex[item.msg.generation_group_id || item.msg.id] ?? item.groupVersions.length - 1) === 0"
-          @click="switchVersion(item.msg.generation_group_id || item.msg.id, -1, item.groupVersions)"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
-        <span class="gen-label">{{ currentVersionLabel(item.msg.generation_group_id || item.msg.id, item.groupVersions) }}</span>
-        <button
-          class="gen-btn"
-          :disabled="(activeGenIndex[item.msg.generation_group_id || item.msg.id] ?? item.groupVersions.length - 1) === item.groupVersions.length - 1"
-          @click="switchVersion(item.msg.generation_group_id || item.msg.id, 1, item.groupVersions)"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
-        </button>
-      </div>
+      <!-- 正在重新生成该 group：内联显示流式内容，替换原消息 -->
+      <template v-if="item.msg.role === 'assistant' && regenGroupId === item.groupID && store.streaming">
+        <MessageItem
+          v-if="store.streamContent || store.streamThinking"
+          :msg="makeStreamMsg(store.streamContent)"
+          :streaming="true"
+          :thinking="store.streamThinking"
+        />
+        <div v-else class="thinking">
+          <div class="thinking-dots"><span /><span /><span /></div>
+        </div>
+      </template>
+
+      <!-- 正常渲染 -->
+      <template v-else>
+        <MessageItem
+          :msg="item.msg"
+          :is-last="false"
+          :show-actions="item.msg.role === 'assistant' && !store.streaming"
+          @regenerate="handleRegenerate(item.groupID, idx)"
+        />
+
+        <!-- 版本切换条 -->
+        <div v-if="item.groupVersions.length > 1" class="gen-switcher">
+          <button
+            class="gen-btn"
+            :disabled="(activeGenIndex[item.groupID] ?? item.groupVersions.length - 1) === 0"
+            @click="switchVersion(item.groupID, -1, item.groupVersions)"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span class="gen-label">{{ currentVersionLabel(item.groupID, item.groupVersions) }}</span>
+          <button
+            class="gen-btn"
+            :disabled="(activeGenIndex[item.groupID] ?? item.groupVersions.length - 1) === item.groupVersions.length - 1"
+            @click="switchVersion(item.groupID, 1, item.groupVersions)"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
+      </template>
 
       <!-- context cutoff divider -->
       <div v-if="store.contextCutoffId && item.msg.id === store.contextCutoffId" class="ctx-divider">
@@ -210,8 +240,8 @@ watch(() => store.currentConvId, () => {
       </div>
     </template>
 
-    <!-- 流式消息 -->
-    <div v-if="store.streamContent || store.streaming" class="streaming">
+    <!-- 普通对话的流式消息（非重新生成时在底部追加） -->
+    <div v-if="!regenGroupId && (store.streamContent || store.streaming)" class="streaming">
       <MessageItem
         v-if="store.streamContent || store.streamThinking"
         :msg="makeStreamMsg(store.streamContent)"
@@ -219,9 +249,7 @@ watch(() => store.currentConvId, () => {
         :thinking="store.streamThinking"
       />
       <div v-else-if="store.streaming" class="thinking">
-        <div class="thinking-dots">
-          <span /><span /><span />
-        </div>
+        <div class="thinking-dots"><span /><span /><span /></div>
       </div>
     </div>
   </div>
