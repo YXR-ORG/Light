@@ -24,7 +24,7 @@ func GetConversation(id string) (*Conversation, error) {
 
 func ListConversations() ([]Conversation, error) {
 	var list []Conversation
-	err := DB.Order("updated_at DESC").Find(&list).Error
+	err := DB.Order("created_at DESC").Find(&list).Error
 	return list, err
 }
 
@@ -36,7 +36,7 @@ func UpdateConversationTitle(id, title string) error {
 func SearchConversations(query string) ([]Conversation, error) {
 	var list []Conversation
 	err := DB.Where("title LIKE ?", "%"+query+"%").
-		Order("updated_at DESC").Find(&list).Error
+		Order("created_at DESC").Find(&list).Error
 	return list, err
 }
 
@@ -75,7 +75,7 @@ func ToggleFavorite(id string) (bool, error) {
 // ListFavorites 返回所有已收藏的对话
 func ListFavorites() ([]Conversation, error) {
 	var list []Conversation
-	err := DB.Where("starred = ?", true).Order("updated_at DESC").Find(&list).Error
+	err := DB.Where("starred = ?", true).Order("created_at DESC").Find(&list).Error
 	return list, err
 }
 
