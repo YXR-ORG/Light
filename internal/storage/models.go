@@ -16,6 +16,7 @@ type Conversation struct {
 	SystemPrompt string    `gorm:"type:text;default:''" json:"system_prompt"`
 	AgentID      string    `gorm:"size:36;default:''" json:"agent_id"`
 	MCPServerIDs string    `gorm:"type:text;default:''" json:"mcp_server_ids"` // JSON []string
+	Starred      bool      `gorm:"default:false" json:"starred"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }

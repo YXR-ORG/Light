@@ -60,6 +60,25 @@ func UpdateConversationModel(id, provider, model string) error {
 		Updates(map[string]any{"provider": provider, "model": model, "updated_at": time.Now()}).Error
 }
 
+// ToggleFavorite 切换对话收藏状态，返回切换后的值
+func ToggleFavorite(id string) (bool, error) {
+	var c Conversation
+	if err := DB.First(&c, "id = ?", id).Error; err != nil {
+		return false, err
+	}
+	newVal := !c.Starred
+	err := DB.Model(&Conversation{}).Where("id = ?", id).
+		Updates(map[string]any{"starred": newVal, "updated_at": time.Now()}).Error
+	return newVal, err
+}
+
+// ListFavorites 返回所有已收藏的对话
+func ListFavorites() ([]Conversation, error) {
+	var list []Conversation
+	err := DB.Where("starred = ?", true).Order("updated_at DESC").Find(&list).Error
+	return list, err
+}
+
 func DeleteConversation(id string) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		tx.Where("conversation_id = ?", id).Delete(&Message{})

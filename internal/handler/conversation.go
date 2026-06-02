@@ -58,3 +58,13 @@ func (h *ConversationHandler) SetModel(id, provider, model string) error {
 func (h *ConversationHandler) GetMessages(convID string) ([]storage.Message, error) {
 	return storage.GetMessages(convID)
 }
+
+// ToggleFavorite 切换收藏状态，返回新状态
+func (h *ConversationHandler) ToggleFavorite(id string) (bool, error) {
+	return storage.ToggleFavorite(id)
+}
+
+// ListFavorites 返回所有收藏对话
+func (h *ConversationHandler) ListFavorites() ([]storage.Conversation, error) {
+	return storage.ListFavorites()
+}

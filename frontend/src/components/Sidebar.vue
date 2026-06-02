@@ -4,7 +4,8 @@ import { useChatStore } from '../stores/chat'
 import { useSettingsStore } from '../stores/settings'
 import { useThemeStore } from '../stores/theme'
 import ConversationItem from './ConversationItem.vue'
-import { Create, Delete, List, Search, GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
+import FavoritesDialog from './FavoritesDialog.vue'
+import { Create, Delete, List, Search, GetMessages, Rename, ToggleFavorite } from '../../wailsjs/go/handler/ConversationHandler'
 import { Get } from '../../wailsjs/go/handler/SettingsHandler'
 import { ListProviders } from '../../wailsjs/go/handler/ProviderHandler'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
@@ -30,6 +31,7 @@ let unsubConvUpdated: (() => void) | null = null
 const agents = ref<storage.Agent[]>([])
 const showAgentDropdown = ref(false)
 const agentSelectRef = ref<HTMLElement | null>(null)
+const showFavorites = ref(false)
 
 const activeAgent = computed(() =>
   agents.value.find(a => a.id === store.activeAgentId) ?? null
@@ -82,7 +84,6 @@ watch(searchQuery, (q) => {
     try {
       store.setConversations(await Search(q))
     } catch {
-      // fallback: show all
       try { store.setConversations(await List()) } catch { /* ignore */ }
     }
   }, 300)
@@ -92,7 +93,6 @@ async function selectConv(id: string) {
   store.setCurrentConv(id)
   const msgs = await GetMessages(id)
   store.setMessages(msgs)
-  // 同步当前对话的 agent_id
   const conv = store.conversations.find(c => c.id === id)
   store.setActiveAgent((conv as any)?.agent_id || null)
 }
@@ -103,15 +103,31 @@ async function deleteConv(id: string) {
     store.setCurrentConv(null)
     store.setMessages([])
   }
-  // reload respecting current search
   try {
     store.setConversations(await Search(searchQuery.value))
   } catch { /* ignore */ }
 }
 
+async function renameConv(id: string, title: string) {
+  try {
+    await Rename(id, title)
+    // 本地乐观更新
+    store.setConversations(store.conversations.map(c =>
+      c.id === id ? { ...c, title } : c
+    ))
+  } catch { /* ignore */ }
+}
+
+async function toggleFavorite(id: string) {
+  try {
+    const newVal = await ToggleFavorite(id)
+    store.setConversations(store.conversations.map(c =>
+      c.id === id ? { ...c, starred: newVal } : c
+    ))
+  } catch { /* ignore */ }
+}
+
 async function newChat() {
-  // 优先用 llm_providers 表里第一个 enabled provider 的 id
-  // 降级到旧的 settings default_provider（type 字符串）
   let providerID = ''
   let model = ''
   try {
@@ -119,13 +135,11 @@ async function newChat() {
     const enabled = providers.filter((p: storage.LLMProvider) => p.enabled)
     if (enabled.length > 0) {
       providerID = enabled[0].id
-      // 取该 provider 下 default_model（暂用 settings 表的值）
       model = await Get('default_model').catch(() => '') || 'gpt-4o'
     }
   } catch { /* ignore */ }
 
   if (!providerID) {
-    // 旧格式兼容
     providerID = await Get('default_provider').catch(() => 'openai') || 'openai'
     model = await Get('default_model').catch(() => 'gpt-4o') || 'gpt-4o'
   }
@@ -210,7 +224,10 @@ async function newChat() {
         v-for="c in store.conversations" :key="c.id"
         :conv="c" :active="c.id === store.currentConvId"
         :highlight="searchQuery"
-        @select="selectConv" @delete="deleteConv"
+        @select="selectConv"
+        @delete="deleteConv"
+        @rename="renameConv"
+        @toggle-favorite="toggleFavorite"
       />
       <div v-if="!store.conversations.length" class="empty-list">
         {{ searchQuery ? '无匹配对话' : '暂无对话' }}
@@ -221,23 +238,24 @@ async function newChat() {
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" stroke="currentColor" stroke-width="1.3"/><path d="M13.5 8a5.5 5.5 0 0 1-.1 1l1.5 1.2-1.3 2.3-1.8-.4a5.5 5.5 0 0 1-1.8 1L9.5 15h-3l-.5-1.9a5.5 5.5 0 0 1-1.8-1l-1.8.4L1 10.2 2.6 9A5.5 5.5 0 0 1 2.5 8c0-.34.03-.67.1-1L1 5.8l1.3-2.3 1.8.4a5.5 5.5 0 0 1 1.8-1L6.5 1h3l.5 1.9a5.5 5.5 0 0 1 1.8 1l1.8-.4L15 5.8 13.4 7c.07.33.1.66.1 1Z" stroke="currentColor" stroke-width="1.3"/></svg>
         设置
       </button>
-      <button class="btn-theme" @click="themeStore.toggle()" :title="themeTitle">
-        <!-- sun: light mode -->
-        <svg v-if="themeStore.mode === 'light'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-          <circle cx="12" cy="12" r="4"/>
-          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
-        </svg>
-        <!-- moon: dark mode -->
-        <svg v-else-if="themeStore.mode === 'dark'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-        </svg>
-        <!-- monitor: system mode -->
-        <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-          <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
-        </svg>
+      <!-- 收藏夹入口 -->
+      <button class="btn-icon" @click="showFavorites = true" title="我的收藏">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+      </button>
+      <button class="btn-icon" @click="themeStore.toggle()" :title="themeTitle">
+        <svg v-if="themeStore.mode === 'light'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg v-else-if="themeStore.mode === 'dark'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
       </button>
     </div>
   </aside>
+
+  <!-- 收藏夹弹窗 -->
+  <FavoritesDialog
+    v-if="showFavorites"
+    @close="showFavorites = false"
+    @select="(id) => { selectConv(id); showFavorites = false }"
+  />
 </template>
 
 <style scoped>
@@ -475,7 +493,7 @@ async function newChat() {
 
 .btn-settings:hover { background: var(--color-sidebar-hover); color: var(--color-text); }
 
-.btn-theme {
+.btn-icon {
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -490,5 +508,5 @@ async function newChat() {
   transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
-.btn-theme:hover { background: var(--color-sidebar-hover); color: var(--color-text); }
+.btn-icon:hover { background: var(--color-sidebar-hover); color: var(--color-text); }
 </style>

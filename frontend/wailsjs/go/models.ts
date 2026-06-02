@@ -172,6 +172,7 @@ export namespace storage {
 	    system_prompt: string;
 	    agent_id: string;
 	    mcp_server_ids: string;
+	    starred: boolean;
 	    // Go type: time
 	    created_at: any;
 	    // Go type: time
@@ -190,6 +191,7 @@ export namespace storage {
 	        this.system_prompt = source["system_prompt"];
 	        this.agent_id = source["agent_id"];
 	        this.mcp_server_ids = source["mcp_server_ids"];
+	        this.starred = source["starred"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	    }

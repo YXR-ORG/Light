@@ -22,6 +22,10 @@ export function List() {
   return window['go']['handler']['ConversationHandler']['List']();
 }
 
+export function ListFavorites() {
+  return window['go']['handler']['ConversationHandler']['ListFavorites']();
+}
+
 export function Rename(arg1, arg2) {
   return window['go']['handler']['ConversationHandler']['Rename'](arg1, arg2);
 }
@@ -40,4 +44,8 @@ export function SetModel(arg1, arg2, arg3) {
 
 export function SetSystemPrompt(arg1, arg2) {
   return window['go']['handler']['ConversationHandler']['SetSystemPrompt'](arg1, arg2);
+}
+
+export function ToggleFavorite(arg1) {
+  return window['go']['handler']['ConversationHandler']['ToggleFavorite'](arg1);
 }

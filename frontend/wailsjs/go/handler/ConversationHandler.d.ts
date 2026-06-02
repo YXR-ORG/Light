@@ -12,6 +12,8 @@ export function GetMessages(arg1:string):Promise<Array<storage.Message>>;
 
 export function List():Promise<Array<storage.Conversation>>;
 
+export function ListFavorites():Promise<Array<storage.Conversation>>;
+
 export function Rename(arg1:string,arg2:string):Promise<void>;
 
 export function Search(arg1:string):Promise<Array<storage.Conversation>>;
@@ -21,3 +23,5 @@ export function SetAgent(arg1:string,arg2:string):Promise<void>;
 export function SetModel(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SetSystemPrompt(arg1:string,arg2:string):Promise<void>;
+
+export function ToggleFavorite(arg1:string):Promise<boolean>;
