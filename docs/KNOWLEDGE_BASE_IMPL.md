@@ -416,40 +416,72 @@ query → Embed([query]) → queryVec（384 维，已 L2 归一化）
 
 ---
 
-## 九、四路融合检索
+## 九、四路融合检索 + RRF 重排序
 
 **代码位置：** `internal/kb/store.go:Search`
 
+### 9.1 整体流程
+
 ```
-Search(query, topK) → []SearchResult
+Search(query, topK)
 
-路径1：FTS5 AND 查询（精度高）
-  buildFTS5Query(query) → andQuery（长词用双引号包裹，用空格连接）
-  chunks_fts MATCH andQuery
+阶段一：摘要层预过滤
+  SearchSummaries(query) → docFilter（相关文档名集合）
+  若摘要层无命中 → docFilter=nil，不过滤
 
-路径2：向量余弦相似度（语义）
-  VectorSearch(query, topK) → 全量扫描 + cosine sort
+阶段二：四路独立检索（每路取 topK×2 候选）
+  路径1：FTS5 AND（精度高）
+  路径2：向量余弦相似度（语义）
+  路径3：FTS5 OR（召回补充）
+  路径4：LIKE 短词补充
 
-路径3：FTS5 OR 查询（召回补充）
-  chunks_fts MATCH orQuery（各词 OR 连接）
-
-路径4：LIKE 短词补充
-  <3字符的词（如"张嘎"）用 chunks LIKE '%张嘎%'
-
-四路结果去重合并，取前 topK 条
+阶段三：RRF 融合排序
+  每路结果携带排名 → 计算 RRF 分数 → 按分数降序 → 取前 topK 条
 ```
 
-**topK：** 默认 10，上限 20。
+### 9.2 RRF 公式
 
-### 11.1 FTS5 查询构建
+```
+RRF(d) = Σ  1 / (k + rank_i(d))     k=60（经验常数）
+
+含义：
+  d   — 某个 chunk
+  i   — 检索路径（FTS5-AND、向量、FTS5-OR、LIKE）
+  rank_i(d) — d 在第 i 路中的排名（0-based）
+
+示例：
+  chunk A：FTS5-AND 排第0，向量排第2
+    RRF = 1/(60+0+1) + 1/(60+2+1) = 0.0164 + 0.0159 = 0.0323
+
+  chunk B：只在向量排第0
+    RRF = 1/(60+0+1) = 0.0164
+
+  → chunk A 得分更高（多路命中有奖励）
+```
+
+摘要层命中文档的所有 chunk，RRF 分数额外 ×1.2（优先展示相关文档）。
+
+### 9.3 RRF vs 原始去重合并
+
+| 维度 | 原方案（去重追加） | RRF |
+|------|--------------------|-----|
+| 排序依据 | 哪路先检索到 | 跨路径综合排名 |
+| 多路命中奖励 | 无（先来先得） | 有（分数累加） |
+| 实现复杂度 | O(n) | O(n log n) |
+| 额外依赖 | 无 | 无 |
+| 效果提升 | — | 多路都认为相关的 chunk 排前面 |
+
+### 9.4 FTS5 查询构建
 
 ```go
 // buildFTS5Query 区分长词和短词
 func buildFTS5Query(query string) (andQuery, orQuery string, shortTerms []string) {
     // >=3 字符 → FTS5 短语查询（双引号包裹）
-    // <3 字符 → LIKE 补充
+    // <3 字符 → LIKE 补充（shortTerms）
 }
 ```
+
+**topK：** 默认 10，上限 20。每路候选取 topK×2，保证 RRF 有足够的候选池。
 
 ---
 

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -327,17 +328,24 @@ LIMIT ?`, strings.Join(conditions, " AND "))
 	return results, rows.Err()
 }
 
-// Search 四路融合检索 + 摘要层两阶段过滤
+// Search 四路融合检索 + 摘要层两阶段过滤 + RRF 重排序
 //
 // 阶段一（摘要层）：若 summaries 表有数据，先用 query 匹配摘要/实体，
 //   得到相关文档 ID 集合，后续检索优先在该范围内进行。
 //   若摘要层无命中（如文档摘要尚未生成），不过滤，走全量检索。
 //
-// 阶段二（四路融合）：
+// 阶段二（四路独立检索）：
 //   路径1: FTS5 AND（精度高）
 //   路径2: 向量余弦相似度（语义）
 //   路径3: FTS5 OR（召回补充）
 //   路径4: LIKE（短词兜底）
+//
+// 阶段三（RRF 融合排序）：
+//   RRF(d) = Σ 1/(k + rank_i(d))，k=60
+//   每路结果带排名，多路命中的 chunk 得分累加，最终按 RRF 分数降序输出。
+//   摘要层命中的文档保持优先（score × 1.2 加权）。
+const rrfK = 60 // RRF 经验常数
+
 func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 	if topK <= 0 {
 		topK = 10
@@ -347,7 +355,7 @@ func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 	}
 
 	// --- 阶段一：摘要层定位相关文档 ---
-	var docFilter map[string]bool // nil = 不过滤
+	var docFilter map[string]bool
 	summaries, err := s.SearchSummaries(query)
 	if err == nil && len(summaries) > 0 {
 		docFilter = make(map[string]bool, len(summaries))
@@ -357,66 +365,80 @@ func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 		slog.Debug("kbstore: summary filter", "query", query, "docs", len(docFilter))
 	}
 
-	seen := make(map[string]bool)
-	var primary []SearchResult   // 命中摘要过滤的结果（排前面）
-	var fallback []SearchResult  // 未命中摘要过滤的结果（兜底）
+	// rrfScores: content → 累计 RRF 分数
+	rrfScores := make(map[string]float64)
+	// contentToResult: content → SearchResult（保留元数据）
+	contentToResult := make(map[string]SearchResult)
 
-	addUniq := func(r SearchResult) {
-		if seen[r.Content] {
-			return
-		}
-		seen[r.Content] = true
-		if docFilter == nil || docFilter[r.DocName] {
-			primary = append(primary, r)
-		} else {
-			fallback = append(fallback, r)
+	addRanked := func(results []SearchResult) {
+		for rank, r := range results {
+			score := 1.0 / float64(rrfK+rank+1)
+			// 摘要层命中文档加权
+			if docFilter != nil && docFilter[r.DocName] {
+				score *= 1.2
+			}
+			rrfScores[r.Content] += score
+			if _, exists := contentToResult[r.Content]; !exists {
+				contentToResult[r.Content] = r
+			}
 		}
 	}
 
-	// --- 路径1：FTS5 AND 查询（精度高）---
+	// --- 路径1：FTS5 AND（精度高）---
 	andQuery, orQuery, shortTerms := buildFTS5Query(query)
 	if andQuery != "" {
-		r, _ := s.doSearch(andQuery, topK)
-		for _, x := range r {
-			addUniq(x)
-		}
+		r, _ := s.doSearch(andQuery, topK*2)
+		addRanked(r)
 	}
 
 	// --- 路径2：向量检索（语义）---
-	vecResults, vecErr := s.VectorSearch(query, topK)
+	vecResults, vecErr := s.VectorSearch(query, topK*2)
 	if vecErr != nil {
 		slog.Debug("vector search unavailable", "error", vecErr)
 	} else {
-		for _, vr := range vecResults {
-			addUniq(vr.SearchResult)
+		sr := make([]SearchResult, len(vecResults))
+		for i, vr := range vecResults {
+			sr[i] = vr.SearchResult
 		}
+		addRanked(sr)
 	}
 
-	// --- 路径3：FTS5 OR 补充（召回不足时）---
-	if len(primary)+len(fallback) < topK && orQuery != "" && orQuery != andQuery {
-		r, _ := s.doSearch(orQuery, topK)
-		for _, x := range r {
-			addUniq(x)
-		}
+	// --- 路径3：FTS5 OR（召回补充）---
+	if orQuery != "" && orQuery != andQuery {
+		r, _ := s.doSearch(orQuery, topK*2)
+		addRanked(r)
 	}
 
 	// --- 路径4：短词 LIKE 补充 ---
 	if len(shortTerms) > 0 {
-		r, _ := s.searchByLike(shortTerms, topK)
-		for _, x := range r {
-			addUniq(x)
-		}
+		r, _ := s.searchByLike(shortTerms, topK*2)
+		addRanked(r)
 	}
 
-	// 合并：命中摘要的结果优先，兜底结果补充
-	allResults := append(primary, fallback...)
-	if len(allResults) > topK {
-		allResults = allResults[:topK]
+	// --- 阶段三：按 RRF 分数排序 ---
+	type scored struct {
+		r     SearchResult
+		score float64
+	}
+	var ranked []scored
+	for content, score := range rrfScores {
+		ranked = append(ranked, scored{contentToResult[content], score})
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		return ranked[i].score > ranked[j].score
+	})
+
+	if len(ranked) > topK {
+		ranked = ranked[:topK]
+	}
+	results := make([]SearchResult, len(ranked))
+	for i, s := range ranked {
+		results[i] = s.r
 	}
 
-	slog.Info("kbstore: search", "query", query, "results", len(allResults),
+	slog.Info("kbstore: search", "query", query, "results", len(results),
 		"summary_filter", len(docFilter), "vec_available", vecErr == nil)
-	return allResults, nil
+	return results, nil
 }
 
 func (s *Store) doSearch(ftsQuery string, topK int) ([]SearchResult, error) {
