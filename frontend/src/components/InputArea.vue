@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { StreamChat, CancelStream, PickAttachments } from '../../wailsjs/go/handler/ChatHandler'
 import { Get } from '../../wailsjs/go/handler/SettingsHandler'
-import { SetModel } from '../../wailsjs/go/handler/ConversationHandler'
+import { SetModel, SetMode } from '../../wailsjs/go/handler/ConversationHandler'
 import { ListEnabledModels, ListProviders } from '../../wailsjs/go/handler/ProviderHandler'
 import { ListSkills } from '../../wailsjs/go/handler/SkillHandler'
 import { List as ListMCPServers } from '../../wailsjs/go/handler/MCPHandler'
@@ -31,6 +31,24 @@ const showKBPicker = ref(false)
 async function loadKBs() {
   availableKBs.value = await ListKnowledgeBases().catch(() => [])
 }
+
+// 切换对话时，从 conv 里恢复 mode 和 knowledge_base_id
+watch(() => store.currentConvId, async (convId) => {
+  if (!convId) {
+    chatMode.value = 'chat'
+    selectedKBID.value = ''
+    return
+  }
+  const conv = store.conversations.find(c => c.id === convId) as any
+  if (!conv) return
+  const mode = conv.mode || 'chat'
+  chatMode.value = mode as ChatMode
+  selectedKBID.value = conv.knowledge_base_id || ''
+  // 如果是知识模式，预加载知识库列表
+  if (mode === 'knowledge') {
+    await loadKBs()
+  }
+}, { immediate: true })
 
 // 模式/知识库 picker 的 body 绝对定位样式
 const modPickerStyle = ref<Record<string, string>>({})
@@ -80,12 +98,30 @@ function selectMode(mode: ChatMode) {
       selectedKBID.value = availableKBs.value[0].id
     }
   }
+  // 保存到数据库
+  if (store.currentConvId) {
+    SetMode(store.currentConvId, mode, mode === 'knowledge' ? selectedKBID.value : '').catch(() => {})
+    // 同步 store 里的 conv 对象（乐观更新）
+    const conv = store.conversations.find(c => c.id === store.currentConvId) as any
+    if (conv) { conv.mode = mode; if (mode !== 'knowledge') conv.knowledge_base_id = '' }
+  }
 }
 
 const selectedKBName = computed(() => {
   const kb = availableKBs.value.find(k => k.id === selectedKBID.value)
   return kb?.name ?? '选择知识库'
 })
+
+// 选择知识库时保存
+function selectKB(kbId: string) {
+  selectedKBID.value = kbId
+  showKBPicker.value = false
+  if (store.currentConvId) {
+    SetMode(store.currentConvId, 'knowledge', kbId).catch(() => {})
+    const conv = store.conversations.find(c => c.id === store.currentConvId) as any
+    if (conv) conv.knowledge_base_id = kbId
+  }
+}
 
 interface Attachment { name: string; mime_type: string; data: string }
 const attachments = ref<Attachment[]>([])
@@ -566,7 +602,7 @@ function onKeydown(e: KeyboardEvent) {
         <div v-if="availableKBs.length === 0" class="kb-picker-empty">还没有知识库，请先在设置中创建</div>
         <button v-for="kb in availableKBs" :key="kb.id"
           class="kb-picker-item" :class="{ active: selectedKBID === kb.id }"
-          @click="selectedKBID = kb.id; showKBPicker = false">
+          @click="selectKB(kb.id)">
           <span class="kb-picker-name">{{ kb.name }}</span>
           <span class="kb-picker-count">{{ kb.doc_count }} 文档</span>
         </button>

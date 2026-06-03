@@ -9,16 +9,18 @@ import (
 )
 
 type Conversation struct {
-	ID           string    `gorm:"primaryKey;size:36" json:"id"`
-	Title        string    `gorm:"size:256;not null;default:'New Chat'" json:"title"`
-	Provider     string    `gorm:"size:32;not null" json:"provider"`
-	Model        string    `gorm:"size:64;not null" json:"model"`
-	SystemPrompt string    `gorm:"type:text;default:''" json:"system_prompt"`
-	AgentID      string    `gorm:"size:36;default:''" json:"agent_id"`
-	MCPServerIDs string    `gorm:"type:text;default:''" json:"mcp_server_ids"` // JSON []string
-	Starred      bool      `gorm:"default:false" json:"starred"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID              string    `gorm:"primaryKey;size:36" json:"id"`
+	Title           string    `gorm:"size:256;not null;default:'New Chat'" json:"title"`
+	Provider        string    `gorm:"size:32;not null" json:"provider"`
+	Model           string    `gorm:"size:64;not null" json:"model"`
+	SystemPrompt    string    `gorm:"type:text;default:''" json:"system_prompt"`
+	AgentID         string    `gorm:"size:36;default:''" json:"agent_id"`
+	MCPServerIDs    string    `gorm:"type:text;default:''" json:"mcp_server_ids"` // JSON []string
+	Starred         bool      `gorm:"default:false" json:"starred"`
+	Mode            string    `gorm:"size:16;default:'chat'" json:"mode"`            // chat | knowledge
+	KnowledgeBaseID string    `gorm:"size:36;default:''" json:"knowledge_base_id"`   // 知识库 ID（mode=knowledge 时有值）
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type Message struct {

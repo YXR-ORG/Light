@@ -20,6 +20,8 @@ export function Search(arg1:string):Promise<Array<storage.Conversation>>;
 
 export function SetAgent(arg1:string,arg2:string):Promise<void>;
 
+export function SetMode(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function SetModel(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SetSystemPrompt(arg1:string,arg2:string):Promise<void>;

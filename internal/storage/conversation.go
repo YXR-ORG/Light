@@ -60,6 +60,12 @@ func UpdateConversationModel(id, provider, model string) error {
 		Updates(map[string]any{"provider": provider, "model": model, "updated_at": time.Now()}).Error
 }
 
+// UpdateConversationMode 保存对话的输入模式和知识库选择
+func UpdateConversationMode(id, mode, knowledgeBaseID string) error {
+	return DB.Model(&Conversation{}).Where("id = ?", id).
+		UpdateColumns(map[string]any{"mode": mode, "knowledge_base_id": knowledgeBaseID}).Error
+}
+
 // ToggleFavorite 切换对话收藏状态，返回切换后的值（不更新 updated_at，不影响排序）
 func ToggleFavorite(id string) (bool, error) {
 	var c Conversation

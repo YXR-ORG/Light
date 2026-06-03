@@ -173,6 +173,8 @@ export namespace storage {
 	    agent_id: string;
 	    mcp_server_ids: string;
 	    starred: boolean;
+	    mode: string;
+	    knowledge_base_id: string;
 	    // Go type: time
 	    created_at: any;
 	    // Go type: time
@@ -192,6 +194,8 @@ export namespace storage {
 	        this.agent_id = source["agent_id"];
 	        this.mcp_server_ids = source["mcp_server_ids"];
 	        this.starred = source["starred"];
+	        this.mode = source["mode"];
+	        this.knowledge_base_id = source["knowledge_base_id"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	    }

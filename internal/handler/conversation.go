@@ -55,6 +55,11 @@ func (h *ConversationHandler) SetModel(id, provider, model string) error {
 	return storage.UpdateConversationModel(id, provider, model)
 }
 
+// SetMode 保存对话的输入模式和知识库选择
+func (h *ConversationHandler) SetMode(id, mode, knowledgeBaseID string) error {
+	return storage.UpdateConversationMode(id, mode, knowledgeBaseID)
+}
+
 func (h *ConversationHandler) GetMessages(convID string) ([]storage.Message, error) {
 	return storage.GetMessages(convID)
 }
