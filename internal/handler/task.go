@@ -111,9 +111,10 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	slog.Info("StreamTask: LLM configured", "provider", req.Provider, "model", req.Model)
 
 	// 保存用户消息（标记 mode=task）
-	isFirstMessage := false
-	if prevMsgs, err := storage.GetMessages(req.ConversationID); err == nil {
-		isFirstMessage = len(prevMsgs) == 0
+	// 判断是否需要生成标题：会话标题还是默认值时生成
+	needTitle := false
+	if conv, err := storage.GetConversation(req.ConversationID); err == nil {
+		needTitle = conv.Title == "New Chat" || conv.Title == ""
 	}
 	if _, err := storage.SaveTaskMessage(req.ConversationID, "user", req.Content); err != nil {
 		slog.Warn("StreamTask: save user message failed", "error", err)
@@ -205,8 +206,8 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 				slog.Warn("StreamTask: finalContent is empty, skipping SaveMessage")
 			}
 			runtime.EventsEmit(h.ctx, "task:step", step)
-			// 自动生成标题（第一条消息时异步生成）
-			if isFirstMessage && req.Content != "" {
+			// 自动生成标题（会话标题还是默认值时异步生成）
+			if needTitle && req.Content != "" {
 				convID := req.ConversationID
 				userMsg := req.Content
 				appCtx := h.ctx
