@@ -45,8 +45,17 @@ const finalContent = computed(() =>
     : props.steps.filter(s => s.type === 'content').map(s => s.content || '').join('')
 )
 
+// 流式过程中直接显示纯文本，完成后才渲染 markdown，避免不完整语法导致渲染跳变
 const finalHtml = computed(() => {
   if (!finalContent.value) return ''
+  if (props.streaming) {
+    // 流式中：纯文本，换行转 <br>
+    return finalContent.value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br>')
+  }
   return marked(finalContent.value) as string
 })
 
