@@ -190,6 +190,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 
 	// 消费 step channel，转发 task:step events，收集最终回答
 	var finalContent string
+	hadDone := false
 	for step := range stepCh {
 		step.ConvID = req.ConversationID
 		slog.Info("StreamTask: step", "type", step.Type, "content_len", len(step.Content))
@@ -197,6 +198,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 			finalContent += step.Content
 		}
 		if step.Type == "done" {
+			hadDone = true
 			// 先保存 AI 回答到 DB，再发 done 事件，确保前端 loadTaskHistory 能读到数据
 			slog.Info("StreamTask: done received", "finalContent_len", len(finalContent), "convID", req.ConversationID)
 			if finalContent != "" {
@@ -246,6 +248,48 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 			break
 		}
 		runtime.EventsEmit(h.ctx, "task:step", step)
+	}
+
+	// channel 关闭但没有 done（context canceled / 超时）→ 补发 done 保证前端不卡住
+	if !hadDone {
+		slog.Info("StreamTask: agent stopped without done, emitting fallback done", "finalContent_len", len(finalContent), "convID", req.ConversationID)
+		if finalContent != "" {
+			msgID, err := storage.SaveTaskMessage(req.ConversationID, "assistant", finalContent)
+			if err != nil {
+				slog.Warn("StreamTask: save assistant message failed (fallback)", "error", err)
+			} else {
+				slog.Info("StreamTask: assistant message saved (fallback)", "msgID", msgID)
+			}
+		}
+		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{
+			ConvID: req.ConversationID, Type: "done",
+		})
+		// 自动生成标题
+		if needTitle && req.Content != "" {
+			convID := req.ConversationID
+			appCtx := h.ctx
+			go func() {
+				titleCtx, titleCancel := context.WithTimeout(appCtx, 10*time.Second)
+				defer titleCancel()
+				prompt := fmt.Sprintf("请用5个字以内总结这个问题的主题，只输出标题，不要标点符号：%s", req.Content)
+				msgs := []*schema.Message{{Role: schema.User, Content: prompt}}
+				title := ""
+				resp, err := h.chat.Chat(titleCtx, msgs)
+				if err == nil {
+					title = strings.TrimSpace(resp.Content)
+				}
+				if title == "" {
+					title = extractTitle(req.Content, 12)
+				}
+				if title == "" {
+					return
+				}
+				if err := storage.UpdateConversationTitle(convID, title); err != nil {
+					return
+				}
+				runtime.EventsEmit(appCtx, "conversation:updated", convID)
+			}()
+		}
 	}
 
 	return nil

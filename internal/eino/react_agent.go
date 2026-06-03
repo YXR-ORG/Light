@@ -65,7 +65,10 @@ func taskSystemPrompt(workDir string) string {
 - 如果工具返回了完整的文档/手册/技能说明，请提炼其中关键信息，用你自己的话总结
 - **技能文档≠最终输出**：技能告诉你"怎么做"，你要"做出结果"
 
-### 5. 输出规范
+### 5. 效率约束
+- 同类搜索/查询最多 2-3 次，不要反复搜索同一个主题
+- 信息到位后立即开始产出，不要无限研究
+- 如果工具返回的内容足够完成任务，马上输出结果
 - 创建的文件内容用 write_file 写入，不要在回答中贴出全文
 - 最终总结：简短有力，告诉用户你做了什么、产出了什么
 - 如果创建了多个文件，列出文件名和简要说明
@@ -175,7 +178,7 @@ func RunTaskAgent(
 			Tools: tools,
 		},
 		MessageModifier: modifier,
-		MaxStep:         30,
+		MaxStep:         10,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("task agent: 创建 ReAct agent 失败: %w", err)
