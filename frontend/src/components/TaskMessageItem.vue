@@ -82,6 +82,44 @@ function truncate(s: string, max = 800) {
   return s.length <= max ? s : s.slice(0, max) + '\n…（已截断）'
 }
 
+// 解析 tool_result，检测是否为 write_file 的结构化结果
+interface WriteFileResult {
+  ok: boolean
+  path: string
+  abs_path: string
+  bytes: number
+  preview: string
+  truncated: boolean
+}
+
+function parseWriteFileResult(result?: string): WriteFileResult | null {
+  if (!result) return null
+  try {
+    const obj = JSON.parse(result)
+    if (obj.ok && obj.path && obj.preview !== undefined) return obj as WriteFileResult
+  } catch {}
+  return null
+}
+
+// 根据文件扩展名判断是否为 markdown
+function isMarkdown(path: string) {
+  return /\.(md|markdown)$/i.test(path)
+}
+
+// 文件预览 html
+function filePreviewHtml(r: WriteFileResult): string {
+  if (isMarkdown(r.path)) {
+    return marked(r.preview) as string
+  }
+  // 代码文件：用 highlight.js
+  const ext = r.path.split('.').pop() || ''
+  const lang = hljs.getLanguage(ext) ? ext : ''
+  const highlighted = lang
+    ? hljs.highlight(r.preview, { language: lang }).value
+    : hljs.highlightAuto(r.preview).value
+  return `<pre><code>${highlighted}</code></pre>`
+}
+
 function toolIcon(name?: string) {
   if (!name) return '⚙'
   if (name === 'bash_exec') return '💻'
@@ -142,16 +180,37 @@ function toolIcon(name?: string) {
 
           <!-- tool_result：默认折叠，与上一个 tool_call 关联 -->
           <div v-else-if="step.type === 'tool_result'" class="chain-card chain-card--result">
-            <button class="chain-card__header chain-card__header--result" @click="toggleTool(i)">
-              <span class="chain-card__title chain-card__title--result">
-                <span>↳ 结果</span>
-                <span class="chain-card__tool-label">{{ step.tool_name }}</span>
-              </span>
-              <svg class="chain-card__chevron" :class="{ open: toolOpen[i] }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-            </button>
-            <div v-if="toolOpen[i]" class="chain-card__body">
-              <pre class="chain-card__result-body">{{ truncate(step.tool_result || '') }}</pre>
-            </div>
+            <template v-if="parseWriteFileResult(step.tool_result)">
+              <!-- write_file 结构化结果：文件预览卡片 -->
+              <button class="chain-card__header chain-card__header--result" @click="toggleTool(i)">
+                <span class="chain-card__title chain-card__title--result">
+                  <span>✏️</span>
+                  <span class="chain-card__tool-name">{{ parseWriteFileResult(step.tool_result)!.path }}</span>
+                  <span class="chain-card__file-size">{{ parseWriteFileResult(step.tool_result)!.bytes }} B</span>
+                </span>
+                <svg class="chain-card__chevron" :class="{ open: toolOpen[i] }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div v-if="toolOpen[i]" class="chain-card__body chain-card__file-preview">
+                <div class="chain-card__file-preview-inner"
+                  v-html="filePreviewHtml(parseWriteFileResult(step.tool_result)!)" />
+                <div v-if="parseWriteFileResult(step.tool_result)!.truncated" class="chain-card__truncated">
+                  …内容已截断（仅显示前 2000 字符）
+                </div>
+              </div>
+            </template>
+            <template v-else>
+              <!-- 普通 tool_result -->
+              <button class="chain-card__header chain-card__header--result" @click="toggleTool(i)">
+                <span class="chain-card__title chain-card__title--result">
+                  <span>↳ 结果</span>
+                  <span class="chain-card__tool-label">{{ step.tool_name }}</span>
+                </span>
+                <svg class="chain-card__chevron" :class="{ open: toolOpen[i] }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div v-if="toolOpen[i]" class="chain-card__body">
+                <pre class="chain-card__result-body">{{ truncate(step.tool_result || '') }}</pre>
+              </div>
+            </template>
           </div>
 
           <!-- bash_output -->
@@ -318,6 +377,39 @@ function toolIcon(name?: string) {
   border-radius: 4px 16px 16px 16px;
   padding: 10px 14px;
   word-break: break-word;
+}
+
+.chain-card__file-size {
+  font-size: 10.5px;
+  opacity: 0.45;
+  font-family: var(--font-mono);
+}
+
+.chain-card__file-preview {
+  padding: 0;
+}
+
+.chain-card__file-preview-inner {
+  padding: 10px 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.chain-card__file-preview-inner pre {
+  margin: 0;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.chain-card__truncated {
+  padding: 4px 12px 6px;
+  font-size: 11px;
+  color: var(--color-text-3);
+  border-top: 1px solid oklch(0 0 0 / 0.06);
 }
 
 /* 光标 */

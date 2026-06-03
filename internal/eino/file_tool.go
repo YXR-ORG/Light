@@ -116,7 +116,23 @@ func (t *WriteFileTool) InvokableRun(_ context.Context, argsJSON string, _ ...to
 	if err := os.WriteFile(abs, []byte(args.Content), 0644); err != nil {
 		return fmt.Sprintf("写入失败: %v", err), nil
 	}
-	return fmt.Sprintf("已写入: %s（%d 字节）", args.Path, len(args.Content)), nil
+	// 返回结构化结果，包含文件路径和内容预览（供前端渲染）
+	preview := args.Content
+	truncated := false
+	if len([]rune(preview)) > 2000 {
+		runes := []rune(preview)
+		preview = string(runes[:2000])
+		truncated = true
+	}
+	result, _ := json.Marshal(map[string]any{
+		"ok":        true,
+		"path":      args.Path,
+		"abs_path":  abs,
+		"bytes":     len(args.Content),
+		"preview":   preview,
+		"truncated": truncated,
+	})
+	return string(result), nil
 }
 
 // ---- list_dir ----
