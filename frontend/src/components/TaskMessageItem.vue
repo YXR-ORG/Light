@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 
@@ -31,7 +31,7 @@ const props = defineProps<{
   steps: TaskStep[]
   streaming?: boolean
   isHistory?: boolean
-  streamingContent?: string  // 直接传入累加的流式内容，不从 steps 提取
+  streamingContent?: string
 }>()
 
 const userHtml = computed(() => {
@@ -39,7 +39,6 @@ const userHtml = computed(() => {
   return marked(props.userContent) as string
 })
 
-// 优先用 streamingContent prop，否则从 steps 提取（历史模式）
 const finalContent = computed(() =>
   props.streamingContent !== undefined
     ? props.streamingContent
@@ -51,7 +50,7 @@ const finalHtml = computed(() => {
   return marked(finalContent.value) as string
 })
 
-// 推理链：非 content/done 的步骤，合并连续同类 delta
+// 推理链：非 content/done，合并连续同类 delta
 const chainSteps = computed(() => {
   const raw = props.steps.filter(s => s.type !== 'content' && s.type !== 'done')
   if (!raw.length) return []
@@ -67,6 +66,13 @@ const chainSteps = computed(() => {
   return merged
 })
 
+// 折叠状态：默认折叠
+const thinkingOpen = ref(false)
+const toolOpen = ref<Record<number, boolean>>({})
+
+function toggleThinking() { thinkingOpen.value = !thinkingOpen.value }
+function toggleTool(i: number) { toolOpen.value[i] = !toolOpen.value[i] }
+
 function formatArgs(args?: string) {
   if (!args) return ''
   try { return JSON.stringify(JSON.parse(args), null, 2) } catch { return args }
@@ -78,9 +84,9 @@ function truncate(s: string, max = 800) {
 
 function toolIcon(name?: string) {
   if (!name) return '⚙'
-  if (name === 'bash_exec') return '>'
+  if (name === 'bash_exec') return '💻'
   if (name === 'read_file') return '📖'
-  if (name === 'write_file') return '✏'
+  if (name === 'write_file') return '✏️'
   if (name === 'list_dir') return '📂'
   if (name === 'make_dir') return '📁'
   if (name?.startsWith('search_')) return '🔍'
@@ -99,52 +105,73 @@ function toolIcon(name?: string) {
   <div v-else class="task-msg task-msg--assistant">
 
     <!-- 历史模式：直接渲染 markdown -->
-    <div v-if="isHistory" class="task-msg__bubble markdown-body" v-html="finalHtml" />
+    <div v-if="isHistory" class="task-answer__bubble markdown-body" v-html="finalHtml" />
 
-    <!-- 流式/终端模式：平铺所有步骤 -->
+    <!-- 流式模式 -->
     <template v-else>
 
-      <!-- 推理链：终端平铺 -->
-      <div v-if="chainSteps.length" class="task-terminal">
+      <!-- 推理链 -->
+      <div v-if="chainSteps.length" class="task-chain">
         <template v-for="(step, i) in chainSteps" :key="i">
 
-          <!-- thinking -->
-          <div v-if="step.type === 'thinking'" class="term-block term-block--think">
-            <span class="term-prefix">💭</span>
-            <span class="term-text">{{ step.content }}</span>
+          <!-- thinking：默认折叠 -->
+          <div v-if="step.type === 'thinking'" class="chain-card chain-card--thinking">
+            <button class="chain-card__header" @click="toggleThinking">
+              <span class="chain-card__title">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                思考过程
+              </span>
+              <svg class="chain-card__chevron" :class="{ open: thinkingOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div v-if="thinkingOpen" class="chain-card__body chain-card__body--pre">{{ step.content }}</div>
           </div>
 
-          <!-- tool_call -->
-          <div v-else-if="step.type === 'tool_call'" class="term-block term-block--tool">
-            <span class="term-prefix">{{ toolIcon(step.tool_name) }} <span class="term-tool-name">{{ step.tool_name }}</span></span>
-            <pre v-if="step.tool_args" class="term-code">{{ formatArgs(step.tool_args) }}</pre>
+          <!-- tool_call：默认折叠 -->
+          <div v-else-if="step.type === 'tool_call'" class="chain-card chain-card--tool">
+            <button class="chain-card__header" @click="toggleTool(i)">
+              <span class="chain-card__title">
+                <span class="chain-card__icon">{{ toolIcon(step.tool_name) }}</span>
+                <span class="chain-card__tool-name">{{ step.tool_name }}</span>
+              </span>
+              <svg class="chain-card__chevron" :class="{ open: toolOpen[i] }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div v-if="toolOpen[i]" class="chain-card__body">
+              <pre class="chain-card__code">{{ formatArgs(step.tool_args) }}</pre>
+            </div>
           </div>
 
-          <!-- tool_result -->
-          <div v-else-if="step.type === 'tool_result'" class="term-block term-block--result">
-            <span class="term-prefix term-prefix--result">↳</span>
-            <pre class="term-result">{{ truncate(step.tool_result || '') }}</pre>
+          <!-- tool_result：默认折叠，与上一个 tool_call 关联 -->
+          <div v-else-if="step.type === 'tool_result'" class="chain-card chain-card--result">
+            <button class="chain-card__header chain-card__header--result" @click="toggleTool(i)">
+              <span class="chain-card__title chain-card__title--result">
+                <span>↳ 结果</span>
+                <span class="chain-card__tool-label">{{ step.tool_name }}</span>
+              </span>
+              <svg class="chain-card__chevron" :class="{ open: toolOpen[i] }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div v-if="toolOpen[i]" class="chain-card__body">
+              <pre class="chain-card__result-body">{{ truncate(step.tool_result || '') }}</pre>
+            </div>
           </div>
 
           <!-- bash_output -->
-          <div v-else-if="step.type === 'bash_output'" class="term-block term-block--bash">
-            <pre class="term-bash">{{ step.content }}</pre>
+          <div v-else-if="step.type === 'bash_output'" class="chain-card chain-card--bash">
+            <pre class="chain-card__bash">{{ step.content }}</pre>
           </div>
 
           <!-- error -->
-          <div v-else-if="step.type === 'error'" class="term-block term-block--error">
-            <span class="term-prefix">✗</span>
+          <div v-else-if="step.type === 'error'" class="chain-card chain-card--error">
+            <span class="chain-card__error-icon">✗</span>
             <span>{{ step.error }}</span>
           </div>
 
         </template>
       </div>
 
-      <!-- 最终回答 -->
+      <!-- 流式内容 / 最终回答 -->
       <div v-if="finalContent || streaming" class="task-answer">
         <div class="task-answer__bubble markdown-body" v-html="finalHtml" />
-        <span v-if="streaming && !finalContent" class="task-cursor">▋</span>
-        <span v-if="streaming && finalContent" class="task-cursor task-cursor--inline">▋</span>
+        <span v-if="streaming" class="task-cursor">▋</span>
       </div>
 
     </template>
@@ -173,132 +200,119 @@ function toolIcon(name?: string) {
 /* AI 消息 */
 .task-msg--assistant { align-items: flex-start; width: 100%; }
 
-/* 历史模式：简洁 markdown bubble */
-.task-msg--assistant > .task-msg__bubble {
-  background: var(--color-paper-2);
-  border-radius: 4px 16px 16px 16px;
-  padding: 10px 14px;
-  max-width: 760px;
-  word-break: break-word;
-}
-
-/* ── 终端区域 ── */
-.task-terminal {
+/* ── 推理链 ── */
+.task-chain {
   width: 100%;
   max-width: 760px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-bottom: 6px;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  font-size: 12px;
+  gap: 3px;
+  margin-bottom: 8px;
 }
 
-.term-block {
+.chain-card {
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  font-size: 12.5px;
+}
+
+.chain-card--thinking {
+  border-color: oklch(0.84 0.04 280);
+  background: oklch(0.975 0.008 280);
+}
+.chain-card--tool {
+  border-color: oklch(0.84 0.06 220);
+  background: oklch(0.975 0.008 220);
+}
+.chain-card--result {
+  border-color: oklch(0.84 0.05 160);
+  background: oklch(0.975 0.008 160);
+}
+.chain-card--bash {
+  background: oklch(0.10 0 0);
+  border-color: oklch(0.22 0 0);
+  padding: 8px 10px;
+}
+.chain-card--error {
+  border-color: oklch(0.78 0.12 20);
+  background: oklch(0.975 0.02 20);
+  padding: 7px 10px;
   display: flex;
-  flex-direction: column;
-  padding: 4px 8px;
-  border-radius: 4px;
+  align-items: center;
+  gap: 6px;
+  color: oklch(0.45 0.15 20);
+}
+
+.chain-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  transition: background var(--duration-fast);
+}
+.chain-card__header:hover { background: oklch(0 0 0 / 0.03); }
+.chain-card__header--result { padding: 5px 10px; }
+
+.chain-card__title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-2);
+}
+.chain-card__title--result { color: oklch(0.45 0.08 160); }
+
+.chain-card__icon { font-size: 13px; }
+.chain-card__tool-name { font-family: var(--font-mono); font-size: 11.5px; color: oklch(0.38 0.1 220); }
+.chain-card__tool-label { font-size: 10.5px; opacity: 0.5; font-family: var(--font-mono); }
+.chain-card__error-icon { font-size: 13px; }
+
+.chain-card__chevron {
+  opacity: 0.4;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+.chain-card__chevron.open { transform: rotate(180deg); }
+
+.chain-card__body {
+  padding: 6px 10px 8px;
+  border-top: 1px solid oklch(0 0 0 / 0.06);
+}
+.chain-card__body--pre,
+.chain-card__code,
+.chain-card__result-body {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  color: var(--color-text-2);
+  line-height: 1.6;
+}
+.chain-card__bash {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  color: oklch(0.82 0.06 150);
   line-height: 1.6;
 }
 
-.term-block--think {
-  color: var(--color-text-3);
-  background: transparent;
-  flex-direction: row;
-  gap: 6px;
-  align-items: flex-start;
-}
-
-.term-block--tool {
-  background: oklch(0.96 0.01 220);
-  border-left: 2px solid oklch(0.75 0.1 220);
-}
-
-.term-block--result {
-  background: oklch(0.97 0.01 160);
-  border-left: 2px solid oklch(0.75 0.08 160);
-  flex-direction: row;
-  gap: 8px;
-  align-items: flex-start;
-}
-
-.term-block--bash {
-  background: oklch(0.10 0 0);
-  border-radius: 4px;
-}
-
-.term-block--error {
-  background: oklch(0.97 0.03 20);
-  border-left: 2px solid oklch(0.7 0.15 20);
-  color: oklch(0.45 0.15 20);
-  flex-direction: row;
-  gap: 6px;
-  align-items: center;
-}
-
-.term-prefix {
-  font-size: 11px;
-  opacity: 0.7;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.term-prefix--result {
-  color: oklch(0.55 0.1 160);
-  font-weight: 600;
-}
-
-.term-tool-name {
-  font-weight: 600;
-  color: oklch(0.4 0.1 220);
-}
-
-.term-code {
-  margin: 4px 0 0 0;
-  padding: 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: oklch(0.35 0.08 220);
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.term-result {
-  margin: 0;
-  padding: 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: oklch(0.35 0.08 160);
-  max-height: 200px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.term-bash {
-  margin: 0;
-  padding: 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: oklch(0.85 0.05 150);
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.term-text {
-  color: var(--color-text-3);
-  white-space: pre-wrap;
-  word-break: break-word;
-  flex: 1;
-  font-family: inherit;
-}
-
 /* ── 最终回答 ── */
-.task-answer {
-  max-width: 760px;
-  width: 100%;
-}
-
+.task-answer { max-width: 760px; width: 100%; }
 .task-answer__bubble {
   background: var(--color-paper-2);
   border-radius: 4px 16px 16px 16px;
@@ -313,7 +327,5 @@ function toolIcon(name?: string) {
   margin-left: 2px;
   font-family: monospace;
 }
-.task-cursor--inline { vertical-align: middle; }
-
 @keyframes blink { 50% { opacity: 0; } }
 </style>
