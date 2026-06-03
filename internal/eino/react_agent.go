@@ -32,25 +32,50 @@ type TaskStep struct {
 
 // taskSystemPrompt 构建 task 模式的 system prompt。
 func taskSystemPrompt(workDir string) string {
-	return fmt.Sprintf(`你是一个自主任务执行智能体。
+	return fmt.Sprintf(`你是 Light 的任务执行智能体。你的工作是**动手执行**，不是**口头描述**。
 
 工作目录：%s
 当前时间：%s
 
-## 可用工具
-- bash_exec：执行 shell 命令（危险命令会请求用户确认）
-- read_file / write_file / list_dir / make_dir：文件操作（仅限工作目录内）
-- 知识库检索、技能、网络搜索、MCP 工具（已在工具列表中）
+## 核心铁律（违反任何一条都算失败）
 
-## 强制执行规则（必须遵守）
-1. **任何涉及文件操作的任务，必须调用对应工具执行，不能只用文字描述结果**
-2. **写文件必须调用 write_file 工具，不能在回答中贴出文件内容代替**
-3. **查询文件、目录必须调用 read_file / list_dir，不能凭记忆回答**
-4. 分析任务 → 制定步骤 → 逐步调用工具执行 → 给出执行摘要
-5. 文件操作路径必须在工作目录内
-6. 优先用文件工具替代简单 bash 操作
-7. 任务完成后给出简洁摘要（完成了什么、产生了哪些文件）
-8. 如果任务无法完成，说明原因和建议`, workDir, time.Now().Format("2006-01-02 15:04"))
+### 1. 绝对禁止"口头计划"
+以下行为**严格禁止**：
+- ❌ "让我先看看目录结构" / "我先查一下" / "我来分析一下" → 这些都是废话，直接调工具
+- ❌ 在 content 中描述你将要做什么 → 你没有"将要"的选项，只有"正在做"
+- ❌ 把工具调用计划写成文字 → 直接发送 tool_call
+
+### 2. 必须调用工具，不能只说不做
+- 需要查看文件？→ 调 read_file
+- 需要查看目录？→ 调 list_dir
+- 需要创建文件？→ 调 write_file
+- 需要搜索？→ 调对应搜索工具
+- 需要执行命令？→ 调 bash_exec
+- **任何文件操作和信息获取都必须通过工具**
+
+### 3. 你的第一个响应必须是工具调用
+- 收到任务第一轮就应调用工具获取信息
+- 不要先输出"好的，我来帮你..."然后停在那里
+- 每个需要信息的步骤，都必须有对应的工具调用
+
+### 4. 工具调用完成后再输出总结
+- 用工具完成所有操作
+- 用工具收集所有信息
+- **最后**才能用文字总结你做了什么
+
+## 可用工具
+所有已配置的工具都在你的工具列表中，包括：
+- bash_exec：执行 shell 命令（危险命令需用户确认）
+- read_file / write_file / list_dir / make_dir：文件系统操作（限工作目录内）
+- 知识库检索、技能、网络搜索、MCP 工具
+
+## 工作流
+1. 收到任务 → 直接调工具（不要先说话）
+2. 工具返回结果 → 根据结果决定下一步工具
+3. 信息充分后 → 输出简明总结
+
+记住：**你不是一个只会说话的助手，你是一个能动手的智能体。用工具证明你的能力。**
+`, workDir, time.Now().Format("2006-01-02 15:04"))
 }
 
 // RunTaskAgent 启动 eino ReAct Agent，返回 TaskStep channel（缓冲 64）。
@@ -90,7 +115,20 @@ func RunTaskAgent(
 
 	// 构建 Callback：监听 model stream → 推送 thinking/content steps
 	//                监听 tool start/end → 推送 tool_call/tool_result steps
-	modelHandler := &ub.ModelCallbackHandler{}
+	modelHandler := &ub.ModelCallbackHandler{
+		OnEnd: func(ctx context.Context, info *callbacks.RunInfo, output *model.CallbackOutput) context.Context {
+			if output != nil && output.Message != nil {
+				tcCount := len(output.Message.ToolCalls)
+				contentLen := len(output.Message.Content)
+				reasonLen := len(output.Message.ReasoningContent)
+				slog.Info("TaskAgent model round end", "tool_calls", tcCount, "content_len", contentLen, "reasoning_len", reasonLen)
+				if tcCount == 0 && contentLen > 0 {
+					slog.Warn("TaskAgent model produced content without tool calls - agent may stop", "content_preview", contentLen)
+				}
+			}
+			return ctx
+		},
+	}
 	toolHandler := &ub.ToolCallbackHandler{
 		OnStart: func(ctx context.Context, info *callbacks.RunInfo, input *tool.CallbackInput) context.Context {
 			args := ""
@@ -187,6 +225,12 @@ func RunTaskAgent(
 					if msg == nil {
 						continue
 					}
+				// debug: dump raw tool_calls to diagnose deepseek-v4 format compatibility
+				if len(msg.ToolCalls) > 0 {
+					for i, tc := range msg.ToolCalls {
+						slog.Info("TaskAgent raw tool_call in msg", "round_idx", i, "tool_id", tc.ID, "tool_name", tc.Function.Name, "args_len", len(tc.Function.Arguments))
+					}
+				}
 				if msg.ReasoningContent != "" {
 					ch <- TaskStep{Type: "thinking", Content: msg.ReasoningContent}
 				}

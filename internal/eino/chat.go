@@ -76,9 +76,10 @@ func (s *ChatService) Configure(provider, modelName, apiKey, baseURL string) err
 			baseURL = "https://api.deepseek.com/v1"
 		}
 		s.llm, err = openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
-			Model:   modelName,
-			APIKey:  apiKey,
-			BaseURL: baseURL,
+			Model:           modelName,
+			APIKey:          apiKey,
+			BaseURL:         baseURL,
+			ReasoningEffort: openai.ReasoningEffortLevelLow,
 		})
 	case "gemini":
 		if baseURL == "" {
