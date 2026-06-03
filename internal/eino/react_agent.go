@@ -162,7 +162,7 @@ func RunTaskAgent(
 		// 使用 WithMessageFuture 获取每轮 LLM 的流式输出
 		futureOpt, future := react.WithMessageFuture()
 
-		// 启动 agent，必须消费返回的 output stream，否则 agent 内部会卡住
+		// 启动 agent stream
 		outputStream, err := agentInst.Stream(ctx, msgs,
 			agent.WithComposeOptions(compose.WithCallbacks(cb)),
 			futureOpt,
@@ -172,49 +172,53 @@ func RunTaskAgent(
 			ch <- TaskStep{Type: "error", Error: err.Error()}
 			return
 		}
-		// 在后台消费 output stream（最终结果），防止 agent 内部 backpressure 卡住
+
+		// 并发：goroutine 1 — 从 iterator 读 thinking delta（每轮 LLM 输出）
+		iterDone := make(chan struct{})
 		go func() {
-			defer outputStream.Close()
+			defer close(iterDone)
+			streams := future.GetMessageStreams()
 			for {
-				_, err := outputStream.Recv()
-				if err != nil {
+				sr, ok, err := streams.Next()
+				if err != nil || !ok {
 					break
 				}
+				for {
+					msg, err := sr.Recv()
+					if err != nil {
+						break
+					}
+					if msg == nil {
+						continue
+					}
+					if msg.ReasoningContent != "" {
+						select {
+						case ch <- TaskStep{Type: "thinking", Content: msg.ReasoningContent}:
+						default:
+						}
+					}
+					if msg.Content != "" {
+						select {
+						case ch <- TaskStep{Type: "content", Content: sanitizeContent(msg.Content)}:
+						default:
+						}
+					}
+				}
+				sr.Close()
 			}
 		}()
 
-		// 逐轮读取每轮 LLM 的流式输出
-		streams := future.GetMessageStreams()
+		// goroutine 2（主流程）— 消费 output stream，推进 agent 执行
 		for {
-			sr, ok, err := streams.Next()
+			_, err := outputStream.Recv()
 			if err != nil {
-				slog.Error("TaskAgent stream iterator error", "error", err)
-				ch <- TaskStep{Type: "error", Error: err.Error()}
-				return
+				break
 			}
-			if !ok {
-				break // 所有轮次完成
-			}
-
-			// 读取该轮的流式 delta
-			for {
-				msg, err := sr.Recv()
-				if err != nil {
-					break // 该轮 EOF
-				}
-				if msg == nil {
-					continue
-				}
-				if msg.ReasoningContent != "" {
-					ch <- TaskStep{Type: "thinking", Content: msg.ReasoningContent}
-				}
-				if msg.Content != "" {
-					ch <- TaskStep{Type: "content", Content: sanitizeContent(msg.Content)}
-				}
-			}
-			sr.Close()
 		}
+		outputStream.Close()
 
+		// 等 iterator goroutine 完成
+		<-iterDone
 		ch <- TaskStep{Type: "done"}
 	}()
 
