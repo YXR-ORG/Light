@@ -101,6 +101,7 @@ func RunTaskAgent(
 			if info != nil {
 				name = info.Name
 			}
+			slog.Info("TaskAgent tool_call", "tool", name, "args_len", len(args))
 			select {
 			case ch <- TaskStep{Type: "tool_call", ToolName: name, ToolArgs: args}:
 			default:
@@ -116,6 +117,7 @@ func RunTaskAgent(
 			if info != nil {
 				name = info.Name
 			}
+			slog.Info("TaskAgent tool_result", "tool", name, "result_len", len(result))
 			select {
 			case ch <- TaskStep{Type: "tool_result", ToolName: name, ToolResult: result}:
 			default:
