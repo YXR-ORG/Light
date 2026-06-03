@@ -116,7 +116,8 @@ func (t *WriteFileTool) InvokableRun(_ context.Context, argsJSON string, _ ...to
 	if err := os.WriteFile(abs, []byte(args.Content), 0644); err != nil {
 		return fmt.Sprintf("写入失败: %v", err), nil
 	}
-	// 返回结构化结果，包含文件路径和内容预览（供前端渲染）
+	// 返回人类可读的结果给 LLM，同时在注释里附带结构化数据给前端渲染
+	// 格式：人类可读文本\n<!--WRITE_FILE_RESULT:{json}-->
 	preview := args.Content
 	truncated := false
 	if len([]rune(preview)) > 2000 {
@@ -124,7 +125,7 @@ func (t *WriteFileTool) InvokableRun(_ context.Context, argsJSON string, _ ...to
 		preview = string(runes[:2000])
 		truncated = true
 	}
-	result, _ := json.Marshal(map[string]any{
+	meta, _ := json.Marshal(map[string]any{
 		"ok":        true,
 		"path":      args.Path,
 		"abs_path":  abs,
@@ -132,7 +133,8 @@ func (t *WriteFileTool) InvokableRun(_ context.Context, argsJSON string, _ ...to
 		"preview":   preview,
 		"truncated": truncated,
 	})
-	return string(result), nil
+	humanText := fmt.Sprintf("文件已写入: %s（%d 字节）", args.Path, len(args.Content))
+	return fmt.Sprintf("%s\n<!--WRITE_FILE_RESULT:%s-->", humanText, string(meta)), nil
 }
 
 // ---- list_dir ----

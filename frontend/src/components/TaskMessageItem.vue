@@ -112,6 +112,17 @@ interface WriteFileResult {
 
 function parseWriteFileResult(result?: string): WriteFileResult | null {
   if (!result) return null
+  // 新格式：人类可读文本\n<!--WRITE_FILE_RESULT:{json}-->
+  const marker = '<!--WRITE_FILE_RESULT:'
+  const idx = result.indexOf(marker)
+  if (idx !== -1) {
+    const jsonStr = result.slice(idx + marker.length, result.lastIndexOf('-->'))
+    try {
+      const obj = JSON.parse(jsonStr)
+      if (obj.ok && obj.path) return obj as WriteFileResult
+    } catch {}
+  }
+  // 旧格式兼容：纯 JSON
   try {
     const obj = JSON.parse(result)
     if (obj.ok && obj.path && obj.preview !== undefined) return obj as WriteFileResult
