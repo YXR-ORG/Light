@@ -17,10 +17,10 @@ marked.setOptions({
 export interface TaskStep {
   type: 'thinking' | 'tool_call' | 'tool_result' | 'bash_confirm' | 'bash_output' | 'content' | 'done' | 'error'
   content?: string
-  toolName?: string
-  toolArgs?: string
-  toolResult?: string
-  confirmId?: string
+  tool_name?: string
+  tool_args?: string
+  tool_result?: string
+  confirm_id?: string
   cmd?: string
   error?: string
 }
@@ -30,6 +30,7 @@ const props = defineProps<{
   userContent?: string
   steps: TaskStep[]
   streaming?: boolean
+  isHistory?: boolean  // 历史消息模式：不显示推理链标签，直接渲染 markdown
 }>()
 
 // 用于渲染用户消息 markdown
@@ -87,7 +88,7 @@ function toolIcon(name?: string) {
   if (name === 'write_file') return '✏️'
   if (name === 'list_dir') return '📂'
   if (name === 'make_dir') return '📁'
-  if (name === 'search_knowledge' || name?.startsWith('search_')) return '🔍'
+  if (name === 'search_knowledge' || name.startsWith('search_')) return '🔍'
   if (name === 'web_search') return '🌐'
   return '🔧'
 }
@@ -102,57 +103,63 @@ function toolIcon(name?: string) {
   <!-- AI task 消息 -->
   <div v-else class="task-msg task-msg--assistant">
 
-    <!-- 推理链 -->
-    <div v-if="chainSteps.length" class="task-chain">
+    <!-- 历史模式：直接渲染 markdown，无标签无推理链 -->
+    <div v-if="isHistory" class="task-msg__bubble markdown-body" v-html="finalHtml" />
 
-      <!-- 思考步骤（折叠） -->
-      <template v-for="(step, i) in chainSteps" :key="i">
+    <!-- 流式模式：推理链 + 回答 -->
+    <template v-else>
+      <!-- 推理链 -->
+      <div v-if="chainSteps.length" class="task-chain">
 
-        <!-- thinking -->
-        <div v-if="step.type === 'thinking'" class="chain-card chain-card--thinking">
-          <button class="chain-card__header" @click="thinkingOpen = !thinkingOpen">
-            <span>🤔 思考</span>
-            <span class="chain-card__toggle">{{ thinkingOpen ? '▲' : '▼' }}</span>
-          </button>
-          <div v-if="thinkingOpen" class="chain-card__body chain-card__body--pre">{{ step.content }}</div>
-        </div>
+        <!-- 思考步骤（折叠） -->
+        <template v-for="(step, i) in chainSteps" :key="i">
 
-        <!-- tool_call -->
-        <div v-else-if="step.type === 'tool_call'" class="chain-card chain-card--tool">
-          <button class="chain-card__header" @click="toggleTool(i)">
-            <span>{{ toolIcon(step.toolName) }} {{ step.toolName }}</span>
-            <span class="chain-card__toggle">{{ toolOpen[i] ? '▲' : '▼' }}</span>
-          </button>
-          <div v-if="toolOpen[i]" class="chain-card__body">
-            <pre class="chain-card__code">{{ formatArgs(step.toolArgs) }}</pre>
+          <!-- thinking -->
+          <div v-if="step.type === 'thinking'" class="chain-card chain-card--thinking">
+            <button class="chain-card__header" @click="thinkingOpen = !thinkingOpen">
+              <span>🤔 思考</span>
+              <span class="chain-card__toggle">{{ thinkingOpen ? '▲' : '▼' }}</span>
+            </button>
+            <div v-if="thinkingOpen" class="chain-card__body chain-card__body--pre">{{ step.content }}</div>
           </div>
-        </div>
 
-        <!-- tool_result -->
-        <div v-else-if="step.type === 'tool_result'" class="chain-card chain-card--result">
-          <div class="chain-card__result-label">↳ 结果</div>
-          <pre class="chain-card__result-body">{{ truncate(step.toolResult || '') }}</pre>
-        </div>
+          <!-- tool_call -->
+          <div v-else-if="step.type === 'tool_call'" class="chain-card chain-card--tool">
+            <button class="chain-card__header" @click="toggleTool(i)">
+              <span>{{ toolIcon(step.tool_name) }} {{ step.tool_name }}</span>
+              <span class="chain-card__toggle">{{ toolOpen[i] ? '▲' : '▼' }}</span>
+            </button>
+            <div v-if="toolOpen[i]" class="chain-card__body">
+              <pre class="chain-card__code">{{ formatArgs(step.tool_args) }}</pre>
+            </div>
+          </div>
 
-        <!-- bash_output -->
-        <div v-else-if="step.type === 'bash_output'" class="chain-card chain-card--bash-output">
-          <pre class="chain-card__result-body">{{ step.content }}</pre>
-        </div>
+          <!-- tool_result -->
+          <div v-else-if="step.type === 'tool_result'" class="chain-card chain-card--result">
+            <div class="chain-card__result-label">↳ 结果</div>
+            <pre class="chain-card__result-body">{{ truncate(step.tool_result || '') }}</pre>
+          </div>
 
-        <!-- error -->
-        <div v-else-if="step.type === 'error'" class="chain-card chain-card--error">
-          <span>❌ {{ step.error }}</span>
-        </div>
+          <!-- bash_output -->
+          <div v-else-if="step.type === 'bash_output'" class="chain-card chain-card--bash-output">
+            <pre class="chain-card__result-body">{{ step.content }}</pre>
+          </div>
 
-      </template>
-    </div>
+          <!-- error -->
+          <div v-else-if="step.type === 'error'" class="chain-card chain-card--error">
+            <span>❌ {{ step.error }}</span>
+          </div>
 
-    <!-- 最终回答 -->
-    <div v-if="finalContent || streaming" class="task-msg__answer">
-      <div class="task-msg__answer-label">💬 回答</div>
-      <div class="task-msg__bubble markdown-body" v-html="finalHtml" />
-      <span v-if="streaming" class="task-cursor">▋</span>
-    </div>
+        </template>
+      </div>
+
+      <!-- 最终回答 -->
+      <div v-if="finalContent || streaming" class="task-msg__answer">
+        <div class="task-msg__answer-label">💬 回答</div>
+        <div class="task-msg__bubble markdown-body" v-html="finalHtml" />
+        <span v-if="streaming" class="task-cursor">▋</span>
+      </div>
+    </template>
 
   </div>
 </template>

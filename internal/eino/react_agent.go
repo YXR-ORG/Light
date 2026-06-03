@@ -19,15 +19,15 @@ import (
 
 // TaskStep 是 task 模式推理链中的一个步骤，对应前端 task:step event。
 type TaskStep struct {
-	ConvID     string `json:"conv_id"`    // 会话 ID，前端用于过滤
-	Type       string `json:"type"`       // thinking|tool_call|tool_result|bash_confirm|bash_output|content|done|error
-	Content    string `json:"content"`    // LLM 思考/回答片段
-	ToolName   string `json:"toolName"`   // tool_call / tool_result
-	ToolArgs   string `json:"toolArgs"`   // tool_call：JSON args
-	ToolResult string `json:"toolResult"` // tool_result：执行结果
-	ConfirmID  string `json:"confirmId"`  // bash_confirm：唯一 ID
-	Cmd        string `json:"cmd"`        // bash_confirm / bash_output
-	Error      string `json:"error"`      // error
+	ConvID     string `json:"conv_id"`     // 会话 ID，前端用于过滤
+	Type       string `json:"type"`        // thinking|tool_call|tool_result|bash_confirm|bash_output|content|done|error
+	Content    string `json:"content"`     // LLM 思考/回答片段
+	ToolName   string `json:"tool_name"`   // tool_call / tool_result
+	ToolArgs   string `json:"tool_args"`   // tool_call：JSON args
+	ToolResult string `json:"tool_result"` // tool_result：执行结果
+	ConfirmID  string `json:"confirm_id"`  // bash_confirm：唯一 ID
+	Cmd        string `json:"cmd"`         // bash_confirm / bash_output
+	Error      string `json:"error"`       // error
 }
 
 // taskSystemPrompt 构建 task 模式的 system prompt。

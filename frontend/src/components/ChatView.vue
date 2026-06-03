@@ -98,10 +98,10 @@ function onTaskStep(evt: TaskStepEvent) {
   const step: TaskStep = {
     type: evt.type as TaskStep['type'],
     content: evt.content,
-    toolName: evt.tool_name,
-    toolArgs: evt.tool_args,
-    toolResult: evt.tool_result,
-    confirmId: evt.confirm_id,
+    tool_name: evt.tool_name,
+    tool_args: evt.tool_args,
+    tool_result: evt.tool_result,
+    confirm_id: evt.confirm_id,
     cmd: evt.cmd,
     error: evt.error,
   }
@@ -149,6 +149,7 @@ onUnmounted(() => {
           :role="msg.role as 'user' | 'assistant'"
           :user-content="msg.role === 'user' ? msg.content : undefined"
           :steps="msg.role === 'assistant' ? [{ type: 'content', content: msg.content }] : []"
+          :is-history="true"
         />
       </template>
 
