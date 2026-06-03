@@ -75,12 +75,21 @@ const chainSteps = computed(() => {
   return merged
 })
 
-// 折叠状态：默认折叠
-const thinkingOpen = ref(false)
-const toolOpen = ref<Record<number, boolean>>({})
+// 推理链整体折叠状态（默认折叠）
+const chainOpen = ref(false)
 
-function toggleThinking() { thinkingOpen.value = !thinkingOpen.value }
-function toggleTool(i: number) { toolOpen.value[i] = !toolOpen.value[i] }
+// 推理链步骤摘要（用于折叠时显示）
+const chainSummary = computed(() => {
+  const toolCalls = chainSteps.value.filter(s => s.type === 'tool_call')
+  const hasThinking = chainSteps.value.some(s => s.type === 'thinking')
+  const parts: string[] = []
+  if (hasThinking) parts.push('思考')
+  if (toolCalls.length > 0) {
+    const names = [...new Set(toolCalls.map(s => s.tool_name).filter(Boolean))]
+    parts.push(names.join('、'))
+  }
+  return parts.join(' · ') || '处理过程'
+})
 
 function formatArgs(args?: string) {
   if (!args) return ''
@@ -157,83 +166,62 @@ function toolIcon(name?: string) {
     <!-- 流式模式 -->
     <template v-else>
 
-      <!-- 推理链 -->
+      <!-- 推理链：整体折叠 -->
       <div v-if="chainSteps.length" class="task-chain">
-        <template v-for="(step, i) in chainSteps" :key="i">
+        <!-- 折叠头部 -->
+        <button class="chain-header" @click="chainOpen = !chainOpen">
+          <span class="chain-header__left">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 8v4l3 3"/></svg>
+            <span class="chain-header__label">{{ chainSummary }}</span>
+          </span>
+          <svg class="chain-header__chevron" :class="{ open: chainOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
 
-          <!-- thinking：默认折叠 -->
-          <div v-if="step.type === 'thinking'" class="chain-card chain-card--thinking">
-            <button class="chain-card__header" @click="toggleThinking">
-              <span class="chain-card__title">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-                思考过程
-              </span>
-              <svg class="chain-card__chevron" :class="{ open: thinkingOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-            </button>
-            <div v-if="thinkingOpen" class="chain-card__body chain-card__body--pre">{{ step.content }}</div>
-          </div>
+        <!-- 展开内容：所有步骤平铺 -->
+        <div v-if="chainOpen" class="chain-body">
+          <template v-for="(step, i) in chainSteps" :key="i">
 
-          <!-- tool_call：默认折叠 -->
-          <div v-else-if="step.type === 'tool_call'" class="chain-card chain-card--tool">
-            <button class="chain-card__header" @click="toggleTool(i)">
-              <span class="chain-card__title">
-                <span class="chain-card__icon">{{ toolIcon(step.tool_name) }}</span>
-                <span class="chain-card__tool-name">{{ step.tool_name }}</span>
-              </span>
-              <svg class="chain-card__chevron" :class="{ open: toolOpen[i] }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-            </button>
-            <div v-if="toolOpen[i]" class="chain-card__body">
-              <pre class="chain-card__code">{{ formatArgs(step.tool_args) }}</pre>
+            <!-- thinking -->
+            <div v-if="step.type === 'thinking'" class="chain-step chain-step--think">
+              <span class="chain-step__icon">💭</span>
+              <span class="chain-step__text">{{ step.content }}</span>
             </div>
-          </div>
 
-          <!-- tool_result：默认折叠，与上一个 tool_call 关联 -->
-          <div v-else-if="step.type === 'tool_result'" class="chain-card chain-card--result">
-            <template v-if="parseWriteFileResult(step.tool_result)">
-              <!-- write_file 结构化结果：文件预览卡片 -->
-              <button class="chain-card__header chain-card__header--result" @click="toggleTool(i)">
-                <span class="chain-card__title chain-card__title--result">
-                  <span>✏️</span>
-                  <span class="chain-card__tool-name">{{ parseWriteFileResult(step.tool_result)!.path }}</span>
-                  <span class="chain-card__file-size">{{ parseWriteFileResult(step.tool_result)!.bytes }} B</span>
-                </span>
-                <svg class="chain-card__chevron" :class="{ open: toolOpen[i] }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-              </button>
-              <div v-if="toolOpen[i]" class="chain-card__body chain-card__file-preview">
-                <div class="chain-card__file-preview-inner"
-                  v-html="filePreviewHtml(parseWriteFileResult(step.tool_result)!)" />
-                <div v-if="parseWriteFileResult(step.tool_result)!.truncated" class="chain-card__truncated">
-                  …内容已截断（仅显示前 2000 字符）
-                </div>
-              </div>
-            </template>
-            <template v-else>
-              <!-- 普通 tool_result -->
-              <button class="chain-card__header chain-card__header--result" @click="toggleTool(i)">
-                <span class="chain-card__title chain-card__title--result">
-                  <span>↳ 结果</span>
-                  <span class="chain-card__tool-label">{{ step.tool_name }}</span>
-                </span>
-                <svg class="chain-card__chevron" :class="{ open: toolOpen[i] }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-              </button>
-              <div v-if="toolOpen[i]" class="chain-card__body">
-                <pre class="chain-card__result-body">{{ truncate(step.tool_result || '') }}</pre>
-              </div>
-            </template>
-          </div>
+            <!-- tool_call -->
+            <div v-else-if="step.type === 'tool_call'" class="chain-step chain-step--tool">
+              <span class="chain-step__icon">{{ toolIcon(step.tool_name) }}</span>
+              <span class="chain-step__tool-name">{{ step.tool_name }}</span>
+              <pre v-if="step.tool_args" class="chain-step__code">{{ formatArgs(step.tool_args) }}</pre>
+            </div>
 
-          <!-- bash_output -->
-          <div v-else-if="step.type === 'bash_output'" class="chain-card chain-card--bash">
-            <pre class="chain-card__bash">{{ step.content }}</pre>
-          </div>
+            <!-- tool_result write_file -->
+            <div v-else-if="step.type === 'tool_result' && parseWriteFileResult(step.tool_result)" class="chain-step chain-step--file">
+              <span class="chain-step__icon">✏️</span>
+              <span class="chain-step__tool-name">{{ parseWriteFileResult(step.tool_result)!.path }}</span>
+              <span class="chain-step__file-size">{{ parseWriteFileResult(step.tool_result)!.bytes }} B</span>
+              <div class="chain-step__file-preview markdown-body"
+                v-html="filePreviewHtml(parseWriteFileResult(step.tool_result)!)" />
+            </div>
 
-          <!-- error -->
-          <div v-else-if="step.type === 'error'" class="chain-card chain-card--error">
-            <span class="chain-card__error-icon">✗</span>
-            <span>{{ step.error }}</span>
-          </div>
+            <!-- tool_result 普通 -->
+            <div v-else-if="step.type === 'tool_result'" class="chain-step chain-step--result">
+              <span class="chain-step__icon chain-step__icon--result">↳</span>
+              <pre class="chain-step__result">{{ truncate(step.tool_result || '') }}</pre>
+            </div>
 
-        </template>
+            <!-- bash_output -->
+            <div v-else-if="step.type === 'bash_output'" class="chain-step chain-step--bash">
+              <pre class="chain-step__bash">{{ step.content }}</pre>
+            </div>
+
+            <!-- error -->
+            <div v-else-if="step.type === 'error'" class="chain-step chain-step--error">
+              <span class="chain-step__icon">✗</span>
+              <span>{{ step.error }}</span>
+            </div>
+
+          </template>
+        </div>
       </div>
 
       <!-- 流式内容 / 最终回答 -->
@@ -268,115 +256,150 @@ function toolIcon(name?: string) {
 /* AI 消息 */
 .task-msg--assistant { align-items: flex-start; width: 100%; }
 
-/* ── 推理链 ── */
+/* ── 推理链整体折叠 ── */
 .task-chain {
   width: 100%;
   max-width: 760px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin-bottom: 8px;
-}
-
-.chain-card {
-  border-radius: 6px;
   border: 1px solid var(--color-border);
+  border-radius: 8px;
   overflow: hidden;
+  margin-bottom: 8px;
   font-size: 12.5px;
 }
 
-.chain-card--thinking {
-  border-color: oklch(0.84 0.04 280);
-  background: oklch(0.975 0.008 280);
-}
-.chain-card--tool {
-  border-color: oklch(0.84 0.06 220);
-  background: oklch(0.975 0.008 220);
-}
-.chain-card--result {
-  border-color: oklch(0.84 0.05 160);
-  background: oklch(0.975 0.008 160);
-}
-.chain-card--bash {
-  background: oklch(0.10 0 0);
-  border-color: oklch(0.22 0 0);
-  padding: 8px 10px;
-}
-.chain-card--error {
-  border-color: oklch(0.78 0.12 20);
-  background: oklch(0.975 0.02 20);
-  padding: 7px 10px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: oklch(0.45 0.15 20);
-}
-
-.chain-card__header {
+.chain-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   width: 100%;
-  padding: 6px 10px;
-  background: none;
+  padding: 7px 12px;
+  background: var(--color-paper-2);
   border: none;
   cursor: pointer;
   text-align: left;
-  color: inherit;
   transition: background var(--duration-fast);
 }
-.chain-card__header:hover { background: oklch(0 0 0 / 0.03); }
-.chain-card__header--result { padding: 5px 10px; }
+.chain-header:hover { background: var(--color-paper-3); }
 
-.chain-card__title {
+.chain-header__left {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  color: var(--color-text-2);
   font-size: 12px;
   font-weight: 500;
-  color: var(--color-text-2);
 }
-.chain-card__title--result { color: oklch(0.45 0.08 160); }
 
-.chain-card__icon { font-size: 13px; }
-.chain-card__tool-name { font-family: var(--font-mono); font-size: 11.5px; color: oklch(0.38 0.1 220); }
-.chain-card__tool-label { font-size: 10.5px; opacity: 0.5; font-family: var(--font-mono); }
-.chain-card__error-icon { font-size: 13px; }
+.chain-header__label { color: var(--color-text-2); }
 
-.chain-card__chevron {
+.chain-header__chevron {
   opacity: 0.4;
   transition: transform 0.15s;
   flex-shrink: 0;
 }
-.chain-card__chevron.open { transform: rotate(180deg); }
+.chain-header__chevron.open { transform: rotate(180deg); }
 
-.chain-card__body {
-  padding: 6px 10px 8px;
-  border-top: 1px solid oklch(0 0 0 / 0.06);
+.chain-body {
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
-.chain-card__body--pre,
-.chain-card__code,
-.chain-card__result-body {
+
+/* 每个步骤 */
+.chain-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid oklch(0 0 0 / 0.04);
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  font-size: 11.5px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  margin: 0;
-  max-height: 280px;
-  overflow-y: auto;
-  color: var(--color-text-2);
+  font-size: 12px;
   line-height: 1.6;
 }
-.chain-card__bash {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  font-size: 11.5px;
+.chain-step:last-child { border-bottom: none; }
+
+.chain-step--think {
+  background: oklch(0.975 0.008 280);
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+.chain-step--tool { background: oklch(0.975 0.008 220); }
+.chain-step--file { background: oklch(0.975 0.008 160); flex-direction: column; gap: 4px; }
+.chain-step--result { background: oklch(0.975 0.008 160); }
+.chain-step--bash { background: oklch(0.10 0 0); padding: 8px 12px; }
+.chain-step--error { background: oklch(0.975 0.02 20); color: oklch(0.45 0.15 20); }
+
+.chain-step__icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.chain-step__icon--result { color: oklch(0.55 0.1 160); font-weight: 600; }
+
+.chain-step__tool-name {
+  font-weight: 600;
+  color: oklch(0.38 0.1 220);
+  flex-shrink: 0;
+}
+
+.chain-step__file-size {
+  font-size: 10.5px;
+  opacity: 0.45;
+  flex-shrink: 0;
+}
+
+.chain-step__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  flex: 1;
+  color: var(--color-text-3);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.chain-step__code {
+  margin: 4px 0 0 0;
+  padding: 0;
   white-space: pre-wrap;
   word-break: break-all;
-  margin: 0;
-  max-height: 280px;
+  color: oklch(0.35 0.08 220);
+  max-height: 200px;
   overflow-y: auto;
+  flex: 1;
+  font-size: 11.5px;
+}
+
+.chain-step__result {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: oklch(0.35 0.08 160);
+  max-height: 200px;
+  overflow-y: auto;
+  flex: 1;
+  font-size: 11.5px;
+}
+
+.chain-step__bash {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
   color: oklch(0.82 0.06 150);
-  line-height: 1.6;
+  max-height: 280px;
+  overflow-y: auto;
+  font-size: 11.5px;
+  width: 100%;
+}
+
+.chain-step__file-preview {
+  width: 100%;
+  max-height: 360px;
+  overflow-y: auto;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 4px 0;
 }
 
 /* ── 最终回答 ── */
@@ -386,39 +409,6 @@ function toolIcon(name?: string) {
   border-radius: 4px 16px 16px 16px;
   padding: 10px 14px;
   word-break: break-word;
-}
-
-.chain-card__file-size {
-  font-size: 10.5px;
-  opacity: 0.45;
-  font-family: var(--font-mono);
-}
-
-.chain-card__file-preview {
-  padding: 0;
-}
-
-.chain-card__file-preview-inner {
-  padding: 10px 12px;
-  max-height: 400px;
-  overflow-y: auto;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.chain-card__file-preview-inner pre {
-  margin: 0;
-  font-size: 12px;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.chain-card__truncated {
-  padding: 4px 12px 6px;
-  font-size: 11px;
-  color: var(--color-text-3);
-  border-top: 1px solid oklch(0 0 0 / 0.06);
 }
 
 /* 光标 */
