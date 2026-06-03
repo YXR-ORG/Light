@@ -70,7 +70,7 @@ func RunTaskAgent(
 		return nil, fmt.Errorf("task agent: LLM 未配置")
 	}
 
-	ch := make(chan TaskStep, 64)
+	ch := make(chan TaskStep, 512)
 
 	// emitter：BashTool 推送 bash_confirm / bash_output 到 channel
 	emitter := func(stepType, content, cmd, confirmID string) {
@@ -102,10 +102,7 @@ func RunTaskAgent(
 				name = info.Name
 			}
 			slog.Info("TaskAgent tool_call", "tool", name, "args_len", len(args))
-			select {
-			case ch <- TaskStep{Type: "tool_call", ToolName: name, ToolArgs: args}:
-			default:
-			}
+			ch <- TaskStep{Type: "tool_call", ToolName: name, ToolArgs: args}
 			return ctx
 		},
 		OnEnd: func(ctx context.Context, info *callbacks.RunInfo, output *tool.CallbackOutput) context.Context {
@@ -118,10 +115,7 @@ func RunTaskAgent(
 				name = info.Name
 			}
 			slog.Info("TaskAgent tool_result", "tool", name, "result_len", len(result))
-			select {
-			case ch <- TaskStep{Type: "tool_result", ToolName: name, ToolResult: result}:
-			default:
-			}
+			ch <- TaskStep{Type: "tool_result", ToolName: name, ToolResult: result}
 			return ctx
 		},
 	}
@@ -193,18 +187,12 @@ func RunTaskAgent(
 					if msg == nil {
 						continue
 					}
-					if msg.ReasoningContent != "" {
-						select {
-						case ch <- TaskStep{Type: "thinking", Content: msg.ReasoningContent}:
-						default:
-						}
-					}
-					if msg.Content != "" {
-						select {
-						case ch <- TaskStep{Type: "content", Content: sanitizeContent(msg.Content)}:
-						default:
-						}
-					}
+				if msg.ReasoningContent != "" {
+					ch <- TaskStep{Type: "thinking", Content: msg.ReasoningContent}
+				}
+				if msg.Content != "" {
+					ch <- TaskStep{Type: "content", Content: sanitizeContent(msg.Content)}
+				}
 				}
 				sr.Close()
 			}
