@@ -5,6 +5,7 @@ import { useChatStore } from './stores/chat'
 import SettingsDialog from './components/SettingsDialog.vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatView from './components/ChatView.vue'
+import BashConfirmDialog from './components/BashConfirmDialog.vue'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import { GetMessages } from '../wailsjs/go/handler/ConversationHandler'
 import type { StreamChunk } from './types'
@@ -54,6 +55,7 @@ onUnmounted(() => {
     </main>
   </div>
   <SettingsDialog />
+  <BashConfirmDialog />
 </template>
 
 <style>

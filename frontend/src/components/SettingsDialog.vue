@@ -338,13 +338,15 @@ function cancelConfirm() {
 }
 
 onMounted(async () => {
-  const [engine, tavily, exa, brave, searxng, cfg] = await Promise.all([
+  const [engine, tavily, exa, brave, searxng, cfg, taskWorkDir, taskBlacklist] = await Promise.all([
     GetSetting('search_engine').catch(() => ''),
     GetSetting('tavily_api_key').catch(() => ''),
     GetSetting('exa_api_key').catch(() => ''),
     GetSetting('brave_api_key').catch(() => ''),
     GetSetting('searxng_url').catch(() => ''),
     GetConfig().catch(() => null),
+    GetSetting('task_default_work_dir').catch(() => ''),
+    GetSetting('task_bash_blacklist').catch(() => ''),
   ])
   searchEngine.value = engine || 'tavily'
   searchKeys.value = { tavily, exa, brave, searxng }
@@ -353,7 +355,34 @@ onMounted(async () => {
     webdavUsername.value = cfg.username || ''
     webdavPath.value = cfg.path || '/Light/'
   }
+  taskDefaultWorkDir.value = taskWorkDir || ''
+  taskBashBlacklist.value = taskBlacklist || defaultBashBlacklist
 })
+
+// ── Task 模式设置 ──────────────────────────────────────────────────
+const taskDefaultWorkDir = ref('')
+const taskBashBlacklist = ref('')
+const taskSettingsSaved = ref(false)
+
+const defaultBashBlacklist = `rm -rf /*
+rm -rf ~/
+sudo rm
+dd if=
+mkfs
+:(){ :|:& };:
+shutdown
+reboot
+halt
+poweroff`
+
+async function saveTaskSettings() {
+  await Promise.all([
+    SetSetting('task_default_work_dir', taskDefaultWorkDir.value),
+    SetSetting('task_bash_blacklist', taskBashBlacklist.value),
+  ])
+  taskSettingsSaved.value = true
+  setTimeout(() => { taskSettingsSaved.value = false }, 2000)
+}
 
 async function saveWebDAVConfig() {
   await SaveConfig(webdavURL.value, webdavUsername.value, webdavPassword.value, webdavPath.value)
@@ -625,6 +654,45 @@ function formatSize(bytes: number): string {
                     <button class="btn btn-sm btn-secondary" @click="cancelConfirm">取消</button>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <!-- 任务模式安全设置 -->
+            <div class="setting-section">
+              <div class="setting-section-title">任务模式（Agent）</div>
+              <div class="setting-section-desc">Agent 自主执行任务时的安全策略与默认配置。</div>
+
+              <div class="form-row" style="margin-top:var(--space-3)">
+                <label class="form-label">默认工作目录</label>
+                <input
+                  v-model="taskDefaultWorkDir"
+                  class="form-input"
+                  placeholder="留空则每次对话单独设置，例如 ~/Projects"
+                  style="font-family:var(--font-mono);font-size:12px"
+                />
+              </div>
+
+              <div class="form-row" style="margin-top:var(--space-3)">
+                <label class="form-label">Bash 命令黑名单（每行一条，支持 glob）</label>
+                <div class="setting-section-desc" style="margin-bottom:var(--space-2)">
+                  匹配以下模式的命令在执行前将弹框请求用户确认。
+                </div>
+                <textarea
+                  v-model="taskBashBlacklist"
+                  class="form-input"
+                  rows="8"
+                  style="font-family:var(--font-mono);font-size:12px;resize:vertical"
+                  placeholder="每行一条黑名单规则，支持 shell glob，如 rm -rf *"
+                />
+              </div>
+
+              <div style="display:flex;gap:var(--space-2);margin-top:var(--space-3)">
+                <button class="btn btn-secondary" @click="saveTaskSettings">
+                  {{ taskSettingsSaved ? '已保存 ✓' : '保存设置' }}
+                </button>
+                <button class="btn btn-secondary" @click="taskBashBlacklist = defaultBashBlacklist">
+                  恢复默认
+                </button>
               </div>
             </div>
 

@@ -27,3 +27,5 @@ export function SetModel(arg1:string,arg2:string,arg3:string):Promise<void>;
 export function SetSystemPrompt(arg1:string,arg2:string):Promise<void>;
 
 export function ToggleFavorite(arg1:string):Promise<boolean>;
+
+export function UpdateConversationWorkDir(arg1:string,arg2:string):Promise<void>;

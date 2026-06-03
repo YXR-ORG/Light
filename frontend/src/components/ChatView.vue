@@ -1,9 +1,131 @@
 <script setup lang="ts">
 import { useChatStore } from '../stores/chat'
 import MessageList from './MessageList.vue'
+import TaskMessageItem, { type TaskStep } from './TaskMessageItem.vue'
 import InputArea from './InputArea.vue'
+import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
+import type { storage } from '../../wailsjs/go/models'
 
 const store = useChatStore()
+
+// ─── task 模式状态 ────────────────────────────────────────────────
+const taskListRef = ref<HTMLElement | null>(null)
+
+// 历史 task 消息（从 DB 加载）
+const taskHistoryMsgs = ref<storage.Message[]>([])
+
+// 当前流式 task 步骤
+const currentTaskSteps = ref<TaskStep[]>([])
+// 当前流式 task 对应的用户消息内容
+const currentTaskUserContent = ref('')
+// 是否正在流式输出 task
+const taskStreaming = ref(false)
+
+// 当前会话是否为 task 模式
+const isTaskMode = computed(() => {
+  const conv = store.conversations.find(c => c.id === store.currentConvId) as any
+  return conv?.mode === 'task'
+})
+
+// 加载 task 历史消息
+async function loadTaskHistory() {
+  if (!store.currentConvId) return
+  try {
+    taskHistoryMsgs.value = await GetMessages(store.currentConvId)
+  } catch {
+    taskHistoryMsgs.value = []
+  }
+}
+
+// 监听会话切换
+watch(() => store.currentConvId, async () => {
+  currentTaskSteps.value = []
+  currentTaskUserContent.value = ''
+  taskStreaming.value = false
+  if (isTaskMode.value) await loadTaskHistory()
+}, { immediate: true })
+
+// 监听模式切换
+watch(isTaskMode, async (v) => {
+  if (v) await loadTaskHistory()
+})
+
+// ─── task:step 事件处理 ───────────────────────────────────────────
+interface TaskStepEvent {
+  conv_id: string
+  type: string
+  content?: string
+  tool_name?: string
+  tool_args?: string
+  tool_result?: string
+  confirm_id?: string
+  cmd?: string
+  error?: string
+  user_content?: string
+}
+
+function onTaskStep(evt: TaskStepEvent) {
+  // 只处理当前会话的事件
+  if (evt.conv_id !== store.currentConvId) return
+
+  if (evt.type === 'user_msg') {
+    // 新一轮任务开始：重置步骤，记录用户内容
+    currentTaskSteps.value = []
+    currentTaskUserContent.value = evt.user_content || evt.content || ''
+    taskStreaming.value = true
+    store.setStreaming(true)
+    return
+  }
+
+  if (evt.type === 'done') {
+    taskStreaming.value = false
+    store.setStreaming(false)
+    // 重新从 DB 加载历史，清空当前流式状态
+    loadTaskHistory().then(() => {
+      currentTaskSteps.value = []
+      currentTaskUserContent.value = ''
+    })
+    return
+  }
+
+  if (evt.type === 'error') {
+    currentTaskSteps.value.push({ type: 'error', error: evt.error || '未知错误' })
+    taskStreaming.value = false
+    store.setStreaming(false)
+    return
+  }
+
+  // 其他步骤类型，追加到列表
+  const step: TaskStep = {
+    type: evt.type as TaskStep['type'],
+    content: evt.content,
+    toolName: evt.tool_name,
+    toolArgs: evt.tool_args,
+    toolResult: evt.tool_result,
+    confirmId: evt.confirm_id,
+    cmd: evt.cmd,
+    error: evt.error,
+  }
+  currentTaskSteps.value.push(step)
+  scrollTaskToBottom()
+}
+
+function scrollTaskToBottom() {
+  nextTick(() => {
+    if (taskListRef.value) {
+      taskListRef.value.scrollTop = taskListRef.value.scrollHeight
+    }
+  })
+}
+
+onMounted(() => {
+  EventsOn('task:step', onTaskStep)
+})
+onUnmounted(() => {
+  EventsOff('task:step')
+})
 </script>
 
 <template>
@@ -14,9 +136,52 @@ const store = useChatStore()
         <span class="chat-header-model" v-if="store.conversations.find(c => c.id === store.currentConvId) as any">
           {{ store.providerMap[(store.conversations.find(c => c.id === store.currentConvId) as any)?.provider] || (store.conversations.find(c => c.id === store.currentConvId) as any)?.provider }} · {{ (store.conversations.find(c => c.id === store.currentConvId) as any)?.model }}
         </span>
+        <!-- task 模式标签 -->
+        <span v-if="isTaskMode" class="chat-header-badge">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          任务模式
+        </span>
       </div>
     </div>
-    <MessageList />
+
+    <!-- task 模式消息区 -->
+    <div v-if="isTaskMode" ref="taskListRef" class="task-list">
+      <!-- 历史消息 -->
+      <template v-for="msg in taskHistoryMsgs" :key="msg.id">
+        <TaskMessageItem
+          :role="msg.role as 'user' | 'assistant'"
+          :user-content="msg.role === 'user' ? msg.content : undefined"
+          :steps="msg.role === 'assistant' ? [{ type: 'content', content: msg.content }] : []"
+        />
+      </template>
+
+      <!-- 当前流式轮次 -->
+      <template v-if="taskStreaming || currentTaskSteps.length > 0">
+        <!-- 用户消息 -->
+        <TaskMessageItem
+          v-if="currentTaskUserContent"
+          role="user"
+          :user-content="currentTaskUserContent"
+          :steps="[]"
+        />
+        <!-- AI 步骤 -->
+        <TaskMessageItem
+          role="assistant"
+          :steps="currentTaskSteps"
+          :streaming="taskStreaming"
+        />
+      </template>
+
+      <!-- 空状态 -->
+      <div v-if="taskHistoryMsgs.length === 0 && !taskStreaming" class="task-empty">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        <p>任务模式：Agent 将自主规划并执行多步骤任务</p>
+      </div>
+    </div>
+
+    <!-- 普通模式消息区 -->
+    <MessageList v-else />
+
     <InputArea />
   </div>
   <div v-else class="chat-view empty">
@@ -65,6 +230,42 @@ const store = useChatStore()
   padding: 2px var(--space-2);
   background: var(--color-paper-3);
   border-radius: var(--radius-full);
+}
+
+.chat-header-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-xs);
+  color: oklch(0.45 0.18 280);
+  background: oklch(0.94 0.04 280);
+  border-radius: var(--radius-full);
+  padding: 2px var(--space-2);
+  font-weight: 500;
+}
+
+/* task 消息列表 */
+.task-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+.task-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--color-text-3);
+  font-size: var(--text-sm);
+  text-align: center;
+  padding: var(--space-10) 0;
 }
 
 /* Empty state */

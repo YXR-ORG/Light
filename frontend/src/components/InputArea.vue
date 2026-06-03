@@ -2,8 +2,9 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { StreamChat, CancelStream, PickAttachments } from '../../wailsjs/go/handler/ChatHandler'
+import { StreamTask, StopTask, SelectWorkDir } from '../../wailsjs/go/handler/TaskHandler'
 import { Get } from '../../wailsjs/go/handler/SettingsHandler'
-import { SetModel, SetMode } from '../../wailsjs/go/handler/ConversationHandler'
+import { SetModel, SetMode, UpdateConversationWorkDir } from '../../wailsjs/go/handler/ConversationHandler'
 import { ListEnabledModels, ListProviders } from '../../wailsjs/go/handler/ProviderHandler'
 import { ListSkills } from '../../wailsjs/go/handler/SkillHandler'
 import { List as ListMCPServers } from '../../wailsjs/go/handler/MCPHandler'
@@ -21,12 +22,15 @@ const webSearch = ref(false)
 const ignoreContext = computed(() => store.contextCutoffId !== null)
 
 // 对话模式
-type ChatMode = 'chat' | 'knowledge'
+type ChatMode = 'chat' | 'knowledge' | 'task'
 const chatMode = ref<ChatMode>('chat')
 const showModePicker = ref(false)
 const availableKBs = ref<storage.KnowledgeBase[]>([])
 const selectedKBID = ref('')
 const showKBPicker = ref(false)
+
+// task 模式工作目录
+const workDir = ref('')
 
 async function loadKBs() {
   availableKBs.value = await ListKnowledgeBases().catch(() => [])
@@ -44,6 +48,7 @@ watch(() => store.currentConvId, async (convId) => {
   const mode = conv.mode || 'chat'
   chatMode.value = mode as ChatMode
   selectedKBID.value = conv.knowledge_base_id || ''
+  workDir.value = (conv as any).work_dir || ''
   // 如果是知识模式，预加载知识库列表
   if (mode === 'knowledge') {
     await loadKBs()
@@ -104,6 +109,18 @@ function selectMode(mode: ChatMode) {
     // 同步 store 里的 conv 对象（乐观更新）
     const conv = store.conversations.find(c => c.id === store.currentConvId) as any
     if (conv) { conv.mode = mode; if (mode !== 'knowledge') conv.knowledge_base_id = '' }
+  }
+}
+
+// task 模式：选择工作目录
+async function pickWorkDir() {
+  const dir = await SelectWorkDir().catch(() => '')
+  if (!dir) return
+  workDir.value = dir
+  if (store.currentConvId) {
+    await UpdateConversationWorkDir(store.currentConvId, dir).catch(() => {})
+    const conv = store.conversations.find(c => c.id === store.currentConvId) as any
+    if (conv) (conv as any).work_dir = dir
   }
 }
 
@@ -300,9 +317,46 @@ function onClickOutside(e: MouseEvent) {
   }
 }
 
+// ──────────────────── task 模式发送 ────────────────────
+async function sendTask(text: string) {
+  if (!store.currentConvId) return
+  const providerID = currentProvider.value
+  const providerObj = providerMap.value[providerID]
+  if (!providerObj) {
+    store.resetStream()
+    store.appendStream('⚠️ 请先选择模型供应商')
+    return
+  }
+
+  input.value = ''
+  store.resetStream()
+
+  // 发送任务请求（后端 task:step 事件驱动 ChatView 渲染）
+  store.setStreaming(true)
+  try {
+    await StreamTask({
+      conversation_id: store.currentConvId,
+      content: text,
+      provider: providerID,
+      model: currentModel.value || 'gpt-4o',
+      work_dir: workDir.value,
+    } as any)
+  } catch (e: any) {
+    const msg = e?.message || e?.Message || String(e)
+    store.appendStream(`\n\n**任务错误:** ${msg}`)
+    store.setStreaming(false)
+  }
+}
+
 async function send() {
   const text = input.value.trim()
   if (!text || !store.currentConvId) return
+
+  // task 模式走独立路径
+  if (chatMode.value === 'task') {
+    await sendTask(text)
+    return
+  }
 
   // currentProvider 存的是 provider.id（UUID），从 providerMap 取完整 provider 对象
   const providerID = currentProvider.value
@@ -391,7 +445,11 @@ async function send() {
 }
 
 async function stop() {
-  await CancelStream().catch(() => {})
+  if (chatMode.value === 'task') {
+    if (store.currentConvId) await StopTask(store.currentConvId).catch(() => {})
+  } else {
+    await CancelStream().catch(() => {})
+  }
   store.setStreaming(false)
   store.appendStream('\n\n_已停止_')
 }
@@ -524,6 +582,10 @@ function onKeydown(e: KeyboardEvent) {
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
               知识
             </span>
+            <span v-else-if="chatMode === 'task'">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              任务
+            </span>
             <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
         </div>
@@ -533,6 +595,13 @@ function onKeydown(e: KeyboardEvent) {
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
             <span>{{ selectedKBName }}</span>
             <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+        </div>
+        <!-- 工作目录选择器（仅 task 模式） -->
+        <div v-if="chatMode === 'task'" class="workdir-selector-wrap">
+          <button class="btn-workdir" @click="pickWorkDir" title="选择工作目录">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span class="btn-workdir__label">{{ workDir || '选择目录' }}</span>
           </button>
         </div>
         <!-- 分隔线 -->
@@ -593,9 +662,9 @@ function onKeydown(e: KeyboardEvent) {
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
           <div><div class="mode-name">知识</div><div class="mode-desc">挂载知识库问答</div></div>
         </button>
-        <button class="mode-option mode-option--disabled" disabled>
+        <button class="mode-option" :class="{ active: chatMode === 'task' }" @click="selectMode('task')">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          <div><div class="mode-name">任务 <span class="mode-soon">即将推出</span></div><div class="mode-desc">自主 Agent 模式</div></div>
+          <div><div class="mode-name">任务</div><div class="mode-desc">自主 Agent 模式</div></div>
         </button>
       </div>
       <div v-if="showKBPicker" class="kb-picker" :style="kbPickerStyle">
@@ -1038,4 +1107,20 @@ textarea.has-attach-btn {
 .kb-picker-item.active { color: var(--color-accent); background: var(--color-accent-soft); }
 .kb-picker-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb-picker-count { font-size: 11px; color: var(--color-text-3); flex-shrink: 0; margin-left: var(--space-2); }
+
+/* 工作目录选择器 */
+.workdir-selector-wrap { position: relative; max-width: 220px; }
+.btn-workdir {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px var(--space-2); height: 26px;
+  border: 1px solid oklch(0.75 0.12 280); border-radius: var(--radius-full);
+  background: oklch(0.96 0.02 280); color: oklch(0.45 0.15 280);
+  font-size: 11px; font-family: var(--font-mono); cursor: pointer;
+  max-width: 200px; transition: all var(--duration-fast);
+}
+.btn-workdir:hover { background: oklch(0.92 0.04 280); }
+.btn-workdir__label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 160px; direction: rtl; text-align: left;
+}
 </style>

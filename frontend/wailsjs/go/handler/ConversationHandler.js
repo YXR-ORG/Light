@@ -53,3 +53,7 @@ export function SetSystemPrompt(arg1, arg2) {
 export function ToggleFavorite(arg1) {
   return window['go']['handler']['ConversationHandler']['ToggleFavorite'](arg1);
 }
+
+export function UpdateConversationWorkDir(arg1, arg2) {
+  return window['go']['handler']['ConversationHandler']['UpdateConversationWorkDir'](arg1, arg2);
+}

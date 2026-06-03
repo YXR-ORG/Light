@@ -88,6 +88,30 @@ export namespace handler {
 		    return a;
 		}
 	}
+	export class StreamTaskRequest {
+	    conversationId: string;
+	    content: string;
+	    workDir: string;
+	    provider: string;
+	    model: string;
+	    agentId: string;
+	    regenerateGroupId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StreamTaskRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.conversationId = source["conversationId"];
+	        this.content = source["content"];
+	        this.workDir = source["workDir"];
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.agentId = source["agentId"];
+	        this.regenerateGroupId = source["regenerateGroupId"];
+	    }
+	}
 	export class WebDAVConfig {
 	    url: string;
 	    username: string;
@@ -175,6 +199,7 @@ export namespace storage {
 	    starred: boolean;
 	    mode: string;
 	    knowledge_base_id: string;
+	    work_dir: string;
 	    // Go type: time
 	    created_at: any;
 	    // Go type: time
@@ -196,6 +221,7 @@ export namespace storage {
 	        this.starred = source["starred"];
 	        this.mode = source["mode"];
 	        this.knowledge_base_id = source["knowledge_base_id"];
+	        this.work_dir = source["work_dir"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	    }

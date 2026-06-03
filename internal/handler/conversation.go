@@ -60,6 +60,11 @@ func (h *ConversationHandler) SetMode(id, mode, knowledgeBaseID string) error {
 	return storage.UpdateConversationMode(id, mode, knowledgeBaseID)
 }
 
+// UpdateConversationWorkDir 更新对话的任务工作目录
+func (h *ConversationHandler) UpdateConversationWorkDir(id, workDir string) error {
+	return storage.UpdateConversationWorkDir(id, workDir)
+}
+
 func (h *ConversationHandler) GetMessages(convID string) ([]storage.Message, error) {
 	return storage.GetMessages(convID)
 }
