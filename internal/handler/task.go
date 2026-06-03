@@ -42,13 +42,13 @@ func (h *TaskHandler) SetContext(ctx context.Context) {
 
 // StreamTaskRequest 前端发送给 StreamTask 的请求体。
 type StreamTaskRequest struct {
-	ConversationID    string `json:"conversationId"`
+	ConversationID    string `json:"conversation_id"`
 	Content           string `json:"content"`
-	WorkDir           string `json:"workDir"`
+	WorkDir           string `json:"work_dir"`
 	Provider          string `json:"provider"`
 	Model             string `json:"model"`
-	AgentID           string `json:"agentId"`
-	RegenerateGroupID string `json:"regenerateGroupId"`
+	AgentID           string `json:"agent_id"`
+	RegenerateGroupID string `json:"regenerate_group_id"`
 }
 
 // StreamTask 启动 task 模式 ReAct Agent，通过 task:step events 推送推理链。
@@ -180,10 +180,16 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 		}
 		if step.Type == "done" {
 			// 先保存 AI 回答到 DB，再发 done 事件，确保前端 loadTaskHistory 能读到数据
+			slog.Info("StreamTask: done received", "finalContent_len", len(finalContent), "convID", req.ConversationID)
 			if finalContent != "" {
-				if _, err := storage.SaveMessage(req.ConversationID, "assistant", finalContent, "", "", "", "", ""); err != nil {
+				msgID, err := storage.SaveMessage(req.ConversationID, "assistant", finalContent, "", "", "", "", "")
+				if err != nil {
 					slog.Warn("StreamTask: save assistant message failed", "error", err)
+				} else {
+					slog.Info("StreamTask: assistant message saved", "msgID", msgID)
 				}
+			} else {
+				slog.Warn("StreamTask: finalContent is empty, skipping SaveMessage")
 			}
 			runtime.EventsEmit(h.ctx, "task:step", step)
 			break

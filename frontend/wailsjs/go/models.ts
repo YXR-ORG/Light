@@ -89,13 +89,13 @@ export namespace handler {
 		}
 	}
 	export class StreamTaskRequest {
-	    conversationId: string;
+	    conversation_id: string;
 	    content: string;
-	    workDir: string;
+	    work_dir: string;
 	    provider: string;
 	    model: string;
-	    agentId: string;
-	    regenerateGroupId: string;
+	    agent_id: string;
+	    regenerate_group_id: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new StreamTaskRequest(source);
@@ -103,13 +103,13 @@ export namespace handler {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.conversationId = source["conversationId"];
+	        this.conversation_id = source["conversation_id"];
 	        this.content = source["content"];
-	        this.workDir = source["workDir"];
+	        this.work_dir = source["work_dir"];
 	        this.provider = source["provider"];
 	        this.model = source["model"];
-	        this.agentId = source["agentId"];
-	        this.regenerateGroupId = source["regenerateGroupId"];
+	        this.agent_id = source["agent_id"];
+	        this.regenerate_group_id = source["regenerate_group_id"];
 	    }
 	}
 	export class WebDAVConfig {
