@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -109,6 +111,10 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	slog.Info("StreamTask: LLM configured", "provider", req.Provider, "model", req.Model)
 
 	// 保存用户消息（标记 mode=task）
+	isFirstMessage := false
+	if prevMsgs, err := storage.GetMessages(req.ConversationID); err == nil {
+		isFirstMessage = len(prevMsgs) == 0
+	}
 	if _, err := storage.SaveTaskMessage(req.ConversationID, "user", req.Content); err != nil {
 		slog.Warn("StreamTask: save user message failed", "error", err)
 	}
@@ -199,6 +205,35 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 				slog.Warn("StreamTask: finalContent is empty, skipping SaveMessage")
 			}
 			runtime.EventsEmit(h.ctx, "task:step", step)
+			// 自动生成标题（第一条消息时异步生成）
+			if isFirstMessage && req.Content != "" {
+				convID := req.ConversationID
+				userMsg := req.Content
+				appCtx := h.ctx
+				go func() {
+					titleCtx, titleCancel := context.WithTimeout(appCtx, 10*time.Second)
+					defer titleCancel()
+					prompt := fmt.Sprintf("请用5个字以内总结这个问题的主题，只输出标题，不要标点符号：%s", userMsg)
+					msgs := []*schema.Message{{Role: schema.User, Content: prompt}}
+					title := ""
+					resp, err := h.chat.Chat(titleCtx, msgs)
+					if err == nil {
+						title = strings.TrimSpace(resp.Content)
+					}
+					if title == "" {
+						title = extractTitle(userMsg, 12)
+					}
+					if title == "" {
+						return
+					}
+					if err := storage.UpdateConversationTitle(convID, title); err != nil {
+						slog.Warn("StreamTask: update title failed", "error", err)
+						return
+					}
+					runtime.EventsEmit(appCtx, "conversation:updated", convID)
+					slog.Info("StreamTask: auto title generated", "conv_id", convID, "title", title)
+				}()
+			}
 			break
 		}
 		if step.Type == "error" {
