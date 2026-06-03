@@ -162,17 +162,28 @@ func RunTaskAgent(
 		// 使用 WithMessageFuture 获取每轮 LLM 的流式输出
 		futureOpt, future := react.WithMessageFuture()
 
-		// 在 goroutine 里启动 agent（Stream 会阻塞直到全部完成）
-		errCh := make(chan error, 1)
+		// 启动 agent，必须消费返回的 output stream，否则 agent 内部会卡住
+		outputStream, err := agentInst.Stream(ctx, msgs,
+			agent.WithComposeOptions(compose.WithCallbacks(cb)),
+			futureOpt,
+		)
+		if err != nil {
+			slog.Error("TaskAgent stream error", "error", err)
+			ch <- TaskStep{Type: "error", Error: err.Error()}
+			return
+		}
+		// 在后台消费 output stream（最终结果），防止 agent 内部 backpressure 卡住
 		go func() {
-			_, err := agentInst.Stream(ctx, msgs,
-				agent.WithComposeOptions(compose.WithCallbacks(cb)),
-				futureOpt,
-			)
-			errCh <- err
+			defer outputStream.Close()
+			for {
+				_, err := outputStream.Recv()
+				if err != nil {
+					break
+				}
+			}
 		}()
 
-		// 逐轮读取流式输出
+		// 逐轮读取每轮 LLM 的流式输出
 		streams := future.GetMessageStreams()
 		for {
 			sr, ok, err := streams.Next()
@@ -202,13 +213,6 @@ func RunTaskAgent(
 				}
 			}
 			sr.Close()
-		}
-
-		// 等待 agent 完成
-		if err := <-errCh; err != nil {
-			slog.Error("TaskAgent error", "error", err)
-			ch <- TaskStep{Type: "error", Error: err.Error()}
-			return
 		}
 
 		ch <- TaskStep{Type: "done"}
