@@ -1002,7 +1002,8 @@ function onKeydown(e: KeyboardEvent) {
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 .input-inner:focus-within {
-  border-color: var(--color-border);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
 .input-actions {
