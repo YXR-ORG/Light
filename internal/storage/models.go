@@ -17,8 +17,9 @@ type Conversation struct {
 	AgentID         string    `gorm:"size:36;default:''" json:"agent_id"`
 	MCPServerIDs    string    `gorm:"type:text;default:''" json:"mcp_server_ids"` // JSON []string
 	Starred         bool      `gorm:"default:false" json:"starred"`
-	Mode            string    `gorm:"size:16;default:'chat'" json:"mode"`            // chat | knowledge
+	Mode            string    `gorm:"size:16;default:'chat'" json:"mode"`            // chat | knowledge | task
 	KnowledgeBaseID string    `gorm:"size:36;default:''" json:"knowledge_base_id"`   // 知识库 ID（mode=knowledge 时有值）
+	WorkDir         string    `gorm:"type:text;default:''" json:"work_dir"`          // task 模式工作目录
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }

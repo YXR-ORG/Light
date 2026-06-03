@@ -16,3 +16,12 @@ func GetAllSettings() ([]Setting, error) {
 	err := DB.Find(&list).Error
 	return list, err
 }
+
+// GetSettingWithDefault 读取 setting，若不存在或为空则返回 defaultVal。
+func GetSettingWithDefault(key, defaultVal string) string {
+	val, err := GetSetting(key)
+	if err != nil || val == "" {
+		return defaultVal
+	}
+	return val
+}

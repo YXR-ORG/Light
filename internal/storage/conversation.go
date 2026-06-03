@@ -176,3 +176,9 @@ func GetLatestMessages(convID string) ([]Message, error) {
 	}
 	return result, nil
 }
+
+// UpdateConversationWorkDir 更新 task 模式工作目录，不影响 updated_at。
+func UpdateConversationWorkDir(id, workDir string) error {
+	return DB.Model(&Conversation{}).Where("id = ?", id).
+		UpdateColumn("work_dir", workDir).Error
+}

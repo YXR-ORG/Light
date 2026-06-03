@@ -191,6 +191,21 @@ func (s *ChatService) Stream(ctx context.Context, messages []*schema.Message) (*
 	return llm.Stream(ctx, messages)
 }
 
+// GetToolCallingModel 返回底层 ToolCallingChatModel，供 task 模式的 ReAct Agent 使用。
+// 返回 nil 表示模型未配置或不支持 tool calling。
+func (s *ChatService) GetToolCallingModel() model.ToolCallingChatModel {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.llm == nil {
+		return nil
+	}
+	tcm, ok := s.llm.(model.ToolCallingChatModel)
+	if !ok {
+		return nil
+	}
+	return tcm
+}
+
 // Generate 非流式调用，用于摘要生成等后台任务
 func (s *ChatService) Generate(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
 	s.mu.RLock()

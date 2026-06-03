@@ -40,6 +40,7 @@ func main() {
 			app.skillHandler,
 			app.backupHandler,
 			app.knowledgeHandler,
+			app.taskHandler,
 		},
 	})
 
