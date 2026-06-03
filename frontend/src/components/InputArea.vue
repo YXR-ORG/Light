@@ -1002,8 +1002,7 @@ function onKeydown(e: KeyboardEvent) {
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 .input-inner:focus-within {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
+  border-color: var(--color-border);
 }
 
 .input-actions {
@@ -1065,10 +1064,6 @@ textarea::placeholder { color: var(--color-text-3); }
   pointer-events: none;
   z-index: 9999;
   box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-}
-
-.input-inner:focus-within {
-  border-color: var(--color-accent);
 }
 
 textarea {
