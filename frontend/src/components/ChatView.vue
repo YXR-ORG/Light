@@ -13,13 +13,23 @@ const store = useChatStore()
 // ─── task 模式状态 ────────────────────────────────────────────────
 const taskListRef = ref<HTMLElement | null>(null)
 
-// 历史 task 消息（从 DB 加载）
+// 已完成的轮次（保留推理链，不清空）
+interface TaskRound {
+  userContent: string
+  steps: TaskStep[]
+  assistantContent: string
+}
+const completedRounds = ref<TaskRound[]>([])
+
+// 历史 task 消息（从 DB 加载，仅用于跨会话恢复）
 const taskHistoryMsgs = ref<storage.Message[]>([])
 
 // 当前流式 task 步骤
 const currentTaskSteps = ref<TaskStep[]>([])
 // 当前流式 task 对应的用户消息内容
 const currentTaskUserContent = ref('')
+// 流式内容累加
+const streamingContent = ref('')
 // 是否正在流式输出 task
 const taskStreaming = ref(false)
 
@@ -29,7 +39,7 @@ const isTaskMode = computed(() => {
   return conv?.mode === 'task'
 })
 
-// 加载 task 历史消息
+// 加载 task 历史消息（跨会话恢复用）
 async function loadTaskHistory() {
   if (!store.currentConvId) return
   try {
@@ -39,9 +49,11 @@ async function loadTaskHistory() {
   }
 }
 
-// 监听会话切换
+// 监听会话切换：清空当前轮次，重新加载历史
 watch(() => store.currentConvId, async () => {
+  completedRounds.value = []
   currentTaskSteps.value = []
+  streamingContent.value = ''
   currentTaskUserContent.value = ''
   taskStreaming.value = false
   if (isTaskMode.value) await loadTaskHistory()
@@ -66,9 +78,6 @@ interface TaskStepEvent {
   user_content?: string
 }
 
-// content 步骤用独立的 ref 累加，避免每个 token 都触发 chainSteps computed 重算
-const streamingContent = ref('')
-
 function onTaskStep(evt: TaskStepEvent) {
   if (evt.type === 'user_msg') {
     currentTaskSteps.value = []
@@ -89,12 +98,19 @@ function onTaskStep(evt: TaskStepEvent) {
   if (evt.type === 'done') {
     taskStreaming.value = false
     store.setStreaming(false)
-    loadTaskHistory().then(() => {
-      currentTaskSteps.value = []
-      streamingContent.value = ''
-      currentTaskUserContent.value = ''
-      scrollTaskToBottom()
+    // 把本轮推理链存入 completedRounds，永久显示
+    completedRounds.value.push({
+      userContent: currentTaskUserContent.value,
+      steps: [...currentTaskSteps.value],
+      assistantContent: streamingContent.value,
     })
+    // 清空当前流式状态
+    currentTaskSteps.value = []
+    streamingContent.value = ''
+    currentTaskUserContent.value = ''
+    // 更新 DB 历史（用于跨会话恢复）
+    loadTaskHistory()
+    scrollTaskToBottom()
     return
   }
 
@@ -155,25 +171,41 @@ onUnmounted(() => {
 
     <!-- task 模式消息区 -->
     <div v-if="isTaskMode" ref="taskListRef" class="task-list">
-      <!-- 历史消息 -->
-      <template v-for="msg in taskHistoryMsgs" :key="msg.id">
+
+      <!-- 跨会话恢复：completedRounds 为空时显示 DB 历史（无推理链） -->
+      <template v-if="completedRounds.length === 0">
+        <template v-for="msg in taskHistoryMsgs" :key="msg.id">
+          <TaskMessageItem
+            :role="msg.role as 'user' | 'assistant'"
+            :user-content="msg.role === 'user' ? msg.content : undefined"
+            :steps="msg.role === 'assistant' ? [{ type: 'content', content: msg.content }] : []"
+            :is-history="true"
+          />
+        </template>
+      </template>
+
+      <!-- 当前会话已完成的轮次（保留推理链） -->
+      <template v-for="(round, i) in completedRounds" :key="i">
         <TaskMessageItem
-          :role="msg.role as 'user' | 'assistant'"
-          :user-content="msg.role === 'user' ? msg.content : undefined"
-          :steps="msg.role === 'assistant' ? [{ type: 'content', content: msg.content }] : []"
-          :is-history="true"
+          role="user"
+          :user-content="round.userContent"
+          :steps="[]"
+        />
+        <TaskMessageItem
+          role="assistant"
+          :steps="round.steps"
+          :streaming-content="round.assistantContent"
+          :is-history="false"
         />
       </template>
 
-      <!-- 当前流式轮次（仅在流式进行中或步骤未被历史替换前显示） -->
+      <!-- 当前流式轮次 -->
       <template v-if="(taskStreaming || currentTaskSteps.length > 0 || streamingContent) && currentTaskUserContent">
-        <!-- 用户消息 -->
         <TaskMessageItem
           role="user"
           :user-content="currentTaskUserContent"
           :steps="[]"
         />
-        <!-- AI 步骤 -->
         <TaskMessageItem
           role="assistant"
           :steps="currentTaskSteps"
@@ -183,7 +215,7 @@ onUnmounted(() => {
       </template>
 
       <!-- 空状态 -->
-      <div v-if="taskHistoryMsgs.length === 0 && !taskStreaming" class="task-empty">
+      <div v-if="taskHistoryMsgs.length === 0 && completedRounds.length === 0 && !taskStreaming" class="task-empty">
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         <p>任务模式：Agent 将自主规划并执行多步骤任务</p>
       </div>
