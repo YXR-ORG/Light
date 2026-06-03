@@ -79,13 +79,10 @@ function onTaskStep(evt: TaskStepEvent) {
   if (evt.type === 'done') {
     taskStreaming.value = false
     store.setStreaming(false)
-    // 重新从 DB 加载历史；后端已在发 done 前写入 DB，所以这里能读到数据
-    // 仅当历史加载成功（有数据）时才清空流式步骤，防止空白闪烁
+    // 先加载历史，历史到位后再清空流式步骤，避免中间帧空白/闪烁
     loadTaskHistory().then(() => {
-      if (taskHistoryMsgs.value.length > 0) {
-        currentTaskSteps.value = []
-        currentTaskUserContent.value = ''
-      }
+      currentTaskSteps.value = []
+      currentTaskUserContent.value = ''
     })
     return
   }
@@ -155,11 +152,10 @@ onUnmounted(() => {
         />
       </template>
 
-      <!-- 当前流式轮次 -->
-      <template v-if="taskStreaming || currentTaskSteps.length > 0">
+      <!-- 当前流式轮次（仅在流式进行中或步骤未被历史替换前显示） -->
+      <template v-if="(taskStreaming || currentTaskSteps.length > 0) && currentTaskUserContent">
         <!-- 用户消息 -->
         <TaskMessageItem
-          v-if="currentTaskUserContent"
           role="user"
           :user-content="currentTaskUserContent"
           :steps="[]"

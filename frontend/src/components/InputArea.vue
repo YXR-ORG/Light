@@ -364,7 +364,8 @@ async function sendTask(text: string) {
     } as any)
   } catch (e: any) {
     const msg = e?.message || e?.Message || String(e)
-    store.appendStream(`\n\n**任务错误:** ${msg}`)
+    // task 模式错误通过 task:step error 事件显示，不写 streamContent
+    console.error('task error:', msg)
   } finally {
     // 保底：无论成功/失败，StreamTask 返回后 streaming 必须结束
     store.setStreaming(false)
@@ -470,11 +471,12 @@ async function send() {
 async function stop() {
   if (chatMode.value === 'task') {
     if (store.currentConvId) await StopTask(store.currentConvId).catch(() => {})
+    store.setStreaming(false)
   } else {
     await CancelStream().catch(() => {})
+    store.setStreaming(false)
+    store.appendStream('\n\n_已停止_')
   }
-  store.setStreaming(false)
-  store.appendStream('\n\n_已停止_')
 }
 
 function onKeydown(e: KeyboardEvent) {
