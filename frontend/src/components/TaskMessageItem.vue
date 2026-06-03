@@ -31,6 +31,7 @@ const props = defineProps<{
   steps: TaskStep[]
   streaming?: boolean
   isHistory?: boolean
+  streamingContent?: string  // 直接传入累加的流式内容，不从 steps 提取
 }>()
 
 const userHtml = computed(() => {
@@ -38,8 +39,11 @@ const userHtml = computed(() => {
   return marked(props.userContent) as string
 })
 
+// 优先用 streamingContent prop，否则从 steps 提取（历史模式）
 const finalContent = computed(() =>
-  props.steps.filter(s => s.type === 'content').map(s => s.content || '').join('')
+  props.streamingContent !== undefined
+    ? props.streamingContent
+    : props.steps.filter(s => s.type === 'content').map(s => s.content || '').join('')
 )
 
 const finalHtml = computed(() => {

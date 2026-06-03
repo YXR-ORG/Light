@@ -66,23 +66,34 @@ interface TaskStepEvent {
   user_content?: string
 }
 
+// content 步骤用独立的 ref 累加，避免每个 token 都触发 chainSteps computed 重算
+const streamingContent = ref('')
+
 function onTaskStep(evt: TaskStepEvent) {
   if (evt.type === 'user_msg') {
-    // 新一轮任务开始：重置步骤，记录用户内容
     currentTaskSteps.value = []
+    streamingContent.value = ''
     currentTaskUserContent.value = evt.user_content || evt.content || ''
     taskStreaming.value = true
     store.setStreaming(true)
+    scrollTaskToBottom()
+    return
+  }
+
+  if (evt.type === 'content') {
+    streamingContent.value += evt.content || ''
+    scrollTaskToBottom()
     return
   }
 
   if (evt.type === 'done') {
     taskStreaming.value = false
     store.setStreaming(false)
-    // 先加载历史，历史到位后再清空流式步骤，避免中间帧空白/闪烁
     loadTaskHistory().then(() => {
       currentTaskSteps.value = []
+      streamingContent.value = ''
       currentTaskUserContent.value = ''
+      scrollTaskToBottom()
     })
     return
   }
@@ -91,10 +102,11 @@ function onTaskStep(evt: TaskStepEvent) {
     currentTaskSteps.value.push({ type: 'error', error: evt.error || '未知错误' })
     taskStreaming.value = false
     store.setStreaming(false)
+    scrollTaskToBottom()
     return
   }
 
-  // 其他步骤类型，追加到列表
+  // thinking / tool_call / tool_result / bash_output 等
   const step: TaskStep = {
     type: evt.type as TaskStep['type'],
     content: evt.content,
@@ -154,7 +166,7 @@ onUnmounted(() => {
       </template>
 
       <!-- 当前流式轮次（仅在流式进行中或步骤未被历史替换前显示） -->
-      <template v-if="(taskStreaming || currentTaskSteps.length > 0) && currentTaskUserContent">
+      <template v-if="(taskStreaming || currentTaskSteps.length > 0 || streamingContent) && currentTaskUserContent">
         <!-- 用户消息 -->
         <TaskMessageItem
           role="user"
@@ -165,6 +177,7 @@ onUnmounted(() => {
         <TaskMessageItem
           role="assistant"
           :steps="currentTaskSteps"
+          :streaming-content="streamingContent"
           :streaming="taskStreaming"
         />
       </template>
