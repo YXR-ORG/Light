@@ -60,7 +60,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	}
 	if _, err := os.Stat(req.WorkDir); err != nil {
 		msg := fmt.Sprintf("工作目录不存在: %s", req.WorkDir)
-		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{Type: "error", Error: msg})
+		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: msg})
 		return fmt.Errorf(msg)
 	}
 
@@ -92,25 +92,31 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	}
 	if providerType != "ollama" && apiKey == "" {
 		msg := fmt.Sprintf("请先在设置中配置 %s 的 API Key", req.Provider)
-		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{Type: "error", Error: msg})
+		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: msg})
 		return fmt.Errorf(msg)
 	}
 	if err := h.chat.Configure(providerType, req.Model, apiKey, baseURL); err != nil {
-		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{Type: "error", Error: err.Error()})
+		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: err.Error()})
 		return err
 	}
 
 	llm := h.chat.GetToolCallingModel()
 	if llm == nil {
 		msg := "当前模型不支持 tool calling，请切换模型"
-		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{Type: "error", Error: msg})
+		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: msg})
 		return fmt.Errorf(msg)
 	}
+	slog.Info("StreamTask: LLM configured", "provider", req.Provider, "model", req.Model)
 
 	// 保存用户消息
 	if _, err := storage.SaveMessage(req.ConversationID, "user", req.Content, "", "", "", "", ""); err != nil {
 		slog.Warn("StreamTask: save user message failed", "error", err)
 	}
+
+	// 发送 user_msg 事件，触发前端初始化流式 UI
+	runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{
+		ConvID: req.ConversationID, Type: "user_msg", Content: req.Content,
+	})
 
 	// 加载历史
 	history, err := storage.GetLatestMessages(req.ConversationID)
@@ -130,7 +136,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	var bashTool *eino.BashTool
 	tools := eino.BuildTaskTools(ctx, req.WorkDir, func(stepType, content, cmd, confirmID string) {
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{
-			Type: stepType, Content: content, Cmd: cmd, ConfirmID: confirmID,
+			ConvID: req.ConversationID, Type: stepType, Content: content, Cmd: cmd, ConfirmID: confirmID,
 		})
 	})
 	// 找出 BashTool 引用
@@ -157,29 +163,36 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	_ = storage.UpdateConversationWorkDir(req.ConversationID, req.WorkDir)
 
 	// 启动 ReAct agent
+	slog.Info("StreamTask: starting RunTaskAgent", "workDir", req.WorkDir, "historyLen", len(einoHistory))
 	stepCh, err := eino.RunTaskAgent(ctx, llm, tools, bashTool, req.WorkDir, einoHistory, req.Content)
 	if err != nil {
-		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{Type: "error", Error: err.Error()})
+		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: err.Error()})
 		return err
 	}
 
 	// 消费 step channel，转发 task:step events，收集最终回答
 	var finalContent string
 	for step := range stepCh {
-		runtime.EventsEmit(h.ctx, "task:step", step)
+		step.ConvID = req.ConversationID
+		slog.Info("StreamTask: step", "type", step.Type, "content_len", len(step.Content))
 		if step.Type == "content" {
 			finalContent += step.Content
 		}
-		if step.Type == "done" || step.Type == "error" {
+		if step.Type == "done" {
+			// 先保存 AI 回答到 DB，再发 done 事件，确保前端 loadTaskHistory 能读到数据
+			if finalContent != "" {
+				if _, err := storage.SaveMessage(req.ConversationID, "assistant", finalContent, "", "", "", "", ""); err != nil {
+					slog.Warn("StreamTask: save assistant message failed", "error", err)
+				}
+			}
+			runtime.EventsEmit(h.ctx, "task:step", step)
 			break
 		}
-	}
-
-	// 保存 AI 回答
-	if finalContent != "" {
-		if _, err := storage.SaveMessage(req.ConversationID, "assistant", finalContent, "", "", "", "", ""); err != nil {
-			slog.Warn("StreamTask: save assistant message failed", "error", err)
+		if step.Type == "error" {
+			runtime.EventsEmit(h.ctx, "task:step", step)
+			break
 		}
+		runtime.EventsEmit(h.ctx, "task:step", step)
 	}
 
 	return nil

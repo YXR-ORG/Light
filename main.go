@@ -19,9 +19,10 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:  "Light",
-		Width:  1200,
-		Height: 800,
+		Title:                    "Light",
+		Width:                    1200,
+		Height:                   800,
+		EnableDefaultContextMenu: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

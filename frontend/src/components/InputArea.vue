@@ -32,12 +32,32 @@ const showKBPicker = ref(false)
 // task 模式工作目录
 const workDir = ref('')
 
+// 任务模式 tooltip（Teleport 到 body，避免 overflow:hidden 裁剪）
+const taskTip = ref({ visible: false, x: 0, y: 0 })
+let taskTipTimer: ReturnType<typeof setTimeout> | null = null
+
+function openTaskTip(e: MouseEvent) {
+  if (taskTipTimer) clearTimeout(taskTipTimer)
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  taskTip.value = { visible: true, x: rect.left + rect.width / 2, y: rect.top - 8 }
+}
+function closeTaskTip() {
+  if (taskTipTimer) clearTimeout(taskTipTimer)
+  taskTip.value.visible = false
+}
+function clickTaskTip(e: MouseEvent) {
+  openTaskTip(e)
+  taskTipTimer = setTimeout(() => { taskTip.value.visible = false }, 1500)
+}
+
 async function loadKBs() {
   availableKBs.value = await ListKnowledgeBases().catch(() => [])
 }
 
 // 切换对话时，从 conv 里恢复 mode 和 knowledge_base_id
 watch(() => store.currentConvId, async (convId) => {
+  // 切换对话时强制结束上一次 streaming，避免状态卡住
+  store.setStreaming(false)
   if (!convId) {
     chatMode.value = 'chat'
     selectedKBID.value = ''
@@ -206,6 +226,7 @@ function toggleSkillPicker() {
 }
 
 onMounted(() => {
+  store.setStreaming(false)  // 应用启动时确保 streaming 不卡住
   loadEnabledModels()
   document.addEventListener('mousedown', onClickOutside)
 })
@@ -344,6 +365,8 @@ async function sendTask(text: string) {
   } catch (e: any) {
     const msg = e?.message || e?.Message || String(e)
     store.appendStream(`\n\n**任务错误:** ${msg}`)
+  } finally {
+    // 保底：无论成功/失败，StreamTask 返回后 streaming 必须结束
     store.setStreaming(false)
   }
 }
@@ -564,7 +587,7 @@ function onKeydown(e: KeyboardEvent) {
     </div>
 
     <!-- 顶部状态行 -->
-    <div class="input-meta" v-if="activeSkillLabel || true">
+    <div class="input-meta" v-if="activeSkillLabel">
       <span v-if="activeSkillLabel" class="skill-badge">{{ activeSkillLabel }}</span>
     </div>
 
@@ -615,16 +638,25 @@ function onKeydown(e: KeyboardEvent) {
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/><line x1="18" y1="3" x2="6" y2="21" stroke-width="1.5"/></svg>
         </button>
         <!-- 联网搜索 -->
-        <button class="btn-tool" :class="{ active: webSearch }" @click="webSearch = !webSearch" :title="webSearch ? '关闭联网搜索' : '开启联网搜索'">
+        <button class="btn-tool" :class="{ active: webSearch, 'btn-tool--disabled': chatMode === 'task' }"
+          @mouseenter="chatMode === 'task' && openTaskTip($event)"
+          @mouseleave="chatMode === 'task' && closeTaskTip()"
+          @click="chatMode === 'task' ? clickTaskTip($event) : (webSearch = !webSearch)">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
         </button>
         <!-- Skills -->
-        <button class="btn-tool btn-skill-picker" :class="{ active: showSkillPicker || selectedSkillIDs.length > 0 }" @click="toggleSkillPicker" title="选择技能">
+        <button class="btn-tool btn-skill-picker" :class="{ active: showSkillPicker || selectedSkillIDs.length > 0, 'btn-tool--disabled': chatMode === 'task' }"
+          @mouseenter="chatMode === 'task' && openTaskTip($event)"
+          @mouseleave="chatMode === 'task' && closeTaskTip()"
+          @click="chatMode === 'task' ? clickTaskTip($event) : toggleSkillPicker()">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
           <span v-if="selectedSkillIDs.length > 0" class="skill-count">{{ selectedSkillIDs.length }}</span>
         </button>
         <!-- MCP -->
-        <button class="btn-tool btn-mcp-picker" :class="{ active: showMCPPicker || selectedMCPIDs.length > 0 }" @click="toggleMCPPicker" title="选择 MCP 工具">
+        <button class="btn-tool btn-mcp-picker" :class="{ active: showMCPPicker || selectedMCPIDs.length > 0, 'btn-tool--disabled': chatMode === 'task' }"
+          @mouseenter="chatMode === 'task' && openTaskTip($event)"
+          @mouseleave="chatMode === 'task' && closeTaskTip()"
+          @click="chatMode === 'task' ? clickTaskTip($event) : toggleMCPPicker()">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
           <span v-if="selectedMCPIDs.length > 0" class="mcp-count">{{ selectedMCPIDs.length }}</span>
         </button>
@@ -675,6 +707,12 @@ function onKeydown(e: KeyboardEvent) {
           <span class="kb-picker-name">{{ kb.name }}</span>
           <span class="kb-picker-count">{{ kb.doc_count }} 文档</span>
         </button>
+      </div>
+    </Teleport>
+    <!-- 任务模式 tooltip（Teleport 到 body 避免被 overflow:hidden 裁剪） -->
+    <Teleport to="body">
+      <div v-if="taskTip.visible" class="task-tip-popup" :style="{ left: taskTip.x + 'px', top: taskTip.y + 'px' }">
+        任务模式下会自动调用
       </div>
     </Teleport>
   </div>
@@ -1009,6 +1047,23 @@ textarea::placeholder { color: var(--color-text-3); }
 }
 .btn-tool:hover { background: var(--color-paper-3); color: var(--color-text-2); }
 .btn-tool.active { color: var(--color-accent); background: var(--color-accent-soft); }
+.btn-tool--disabled, .btn-tool--disabled:hover { opacity: 0.35; cursor: not-allowed; background: transparent; color: var(--color-text-3); }
+
+.task-tip-popup {
+  position: fixed;
+  transform: translateX(-50%) translateY(-100%);
+  background: var(--color-paper-4, #2a2a2a);
+  color: var(--color-text, #e0e0e0);
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 9999;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
 
 .input-inner:focus-within {
   border-color: var(--color-accent);

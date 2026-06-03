@@ -19,6 +19,7 @@ import (
 
 // TaskStep 是 task 模式推理链中的一个步骤，对应前端 task:step event。
 type TaskStep struct {
+	ConvID     string `json:"conv_id"`    // 会话 ID，前端用于过滤
 	Type       string `json:"type"`       // thinking|tool_call|tool_result|bash_confirm|bash_output|content|done|error
 	Content    string `json:"content"`    // LLM 思考/回答片段
 	ToolName   string `json:"toolName"`   // tool_call / tool_result

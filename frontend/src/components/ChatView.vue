@@ -67,9 +67,6 @@ interface TaskStepEvent {
 }
 
 function onTaskStep(evt: TaskStepEvent) {
-  // 只处理当前会话的事件
-  if (evt.conv_id !== store.currentConvId) return
-
   if (evt.type === 'user_msg') {
     // 新一轮任务开始：重置步骤，记录用户内容
     currentTaskSteps.value = []
@@ -82,10 +79,13 @@ function onTaskStep(evt: TaskStepEvent) {
   if (evt.type === 'done') {
     taskStreaming.value = false
     store.setStreaming(false)
-    // 重新从 DB 加载历史，清空当前流式状态
+    // 重新从 DB 加载历史；后端已在发 done 前写入 DB，所以这里能读到数据
+    // 仅当历史加载成功（有数据）时才清空流式步骤，防止空白闪烁
     loadTaskHistory().then(() => {
-      currentTaskSteps.value = []
-      currentTaskUserContent.value = ''
+      if (taskHistoryMsgs.value.length > 0) {
+        currentTaskSteps.value = []
+        currentTaskUserContent.value = ''
+      }
     })
     return
   }
