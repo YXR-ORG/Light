@@ -119,7 +119,27 @@ func SaveMessage(convID, role, content, thinking, toolCalls, toolResult, agentID
 	return m, err
 }
 
-// SaveRegeneratedMessage 保存重新生成的 assistant 消息，归入已有 group
+// SaveTaskMessage 保存 task 模式消息，自动标记 mode=task
+func SaveTaskMessage(convID, role, content string) (*Message, error) {
+	id := NewID()
+	m := &Message{
+		ID:                id,
+		ConversationID:    convID,
+		Role:              role,
+		Content:           content,
+		Mode:              "task",
+		GenerationGroupID: id,
+		GenIndex:          0,
+	}
+	err := DB.Create(m).Error
+	if err == nil {
+		DB.Model(&Conversation{}).Where("id = ?", convID).
+			Update("updated_at", time.Now())
+	}
+	return m, err
+}
+
+
 func SaveRegeneratedMessage(convID, content, thinking, groupID string, genIndex int) (*Message, error) {
 	m := &Message{
 		ID:                NewID(),

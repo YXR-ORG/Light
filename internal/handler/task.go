@@ -108,8 +108,8 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	}
 	slog.Info("StreamTask: LLM configured", "provider", req.Provider, "model", req.Model)
 
-	// 保存用户消息
-	if _, err := storage.SaveMessage(req.ConversationID, "user", req.Content, "", "", "", "", ""); err != nil {
+	// 保存用户消息（标记 mode=task）
+	if _, err := storage.SaveTaskMessage(req.ConversationID, "user", req.Content); err != nil {
 		slog.Warn("StreamTask: save user message failed", "error", err)
 	}
 
@@ -118,13 +118,20 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 		ConvID: req.ConversationID, Type: "user_msg", Content: req.Content,
 	})
 
-	// 加载历史
+	// 加载历史，只保留 task 模式的消息（过滤 chat/knowledge 模式的历史，避免污染 agent 行为）
 	history, err := storage.GetLatestMessages(req.ConversationID)
 	if err != nil {
 		slog.Warn("StreamTask: load history failed", "error", err)
 	}
+	// 过滤：只保留 mode=task 或 mode='' 的消息（空 mode 是旧数据兼容）
+	var taskHistory []storage.Message
+	for _, m := range history {
+		if m.Mode == "task" || m.Mode == "" {
+			taskHistory = append(taskHistory, m)
+		}
+	}
 	// 移除最后一条 user 消息（本轮，已单独传入 userMsg）
-	einoHistory := historyToEinoMsgs(history)
+	einoHistory := historyToEinoMsgs(taskHistory)
 	if len(einoHistory) > 0 {
 		last := einoHistory[len(einoHistory)-1]
 		if last.Role == "user" {
@@ -182,7 +189,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 			// 先保存 AI 回答到 DB，再发 done 事件，确保前端 loadTaskHistory 能读到数据
 			slog.Info("StreamTask: done received", "finalContent_len", len(finalContent), "convID", req.ConversationID)
 			if finalContent != "" {
-				msgID, err := storage.SaveMessage(req.ConversationID, "assistant", finalContent, "", "", "", "", "")
+				msgID, err := storage.SaveTaskMessage(req.ConversationID, "assistant", finalContent)
 				if err != nil {
 					slog.Warn("StreamTask: save assistant message failed", "error", err)
 				} else {
