@@ -18,6 +18,7 @@ interface TaskRound {
   userContent: string
   steps: TaskStep[]
   assistantContent: string
+  isCutoff?: boolean  // 该轮次之后有上下文分割线
 }
 const completedRounds = ref<TaskRound[]>([])
 
@@ -37,6 +38,17 @@ const taskStreaming = ref(false)
 const isTaskMode = computed(() => {
   const conv = store.conversations.find(c => c.id === store.currentConvId) as any
   return conv?.mode === 'task'
+})
+
+// task 模式清除上下文：标记最后一轮为 cutoff，下次发送只传 cutoff 之后的历史
+watch(() => store.taskCutoffActive, (active) => {
+  if (!isTaskMode.value) return
+  if (active && completedRounds.value.length > 0) {
+    completedRounds.value.forEach(r => r.isCutoff = false)
+    completedRounds.value[completedRounds.value.length - 1].isCutoff = true
+  } else {
+    completedRounds.value.forEach(r => r.isCutoff = false)
+  }
 })
 
 // 加载 task 历史消息（跨会话恢复用）
@@ -197,6 +209,12 @@ onUnmounted(() => {
           :streaming-content="round.assistantContent"
           :is-history="false"
         />
+        <!-- 上下文分割线 -->
+        <div v-if="round.isCutoff" class="task-ctx-divider">
+          <span class="task-ctx-divider-line" />
+          <span class="task-ctx-divider-label">上下文从此处清除</span>
+          <span class="task-ctx-divider-line" />
+        </div>
       </template>
 
       <!-- 当前流式轮次 -->
@@ -308,6 +326,26 @@ onUnmounted(() => {
   font-size: var(--text-sm);
   text-align: center;
   padding: var(--space-10) 0;
+}
+
+.task-ctx-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  user-select: none;
+}
+.task-ctx-divider-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, oklch(0.65 0.15 25 / 0.4), transparent);
+}
+.task-ctx-divider-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: oklch(0.65 0.15 25 / 0.7);
+  white-space: nowrap;
+  letter-spacing: 0.05em;
 }
 
 /* Empty state */

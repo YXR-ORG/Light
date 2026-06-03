@@ -96,6 +96,7 @@ export namespace handler {
 	    model: string;
 	    agent_id: string;
 	    regenerate_group_id: string;
+	    ignore_context: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new StreamTaskRequest(source);
@@ -110,6 +111,7 @@ export namespace handler {
 	        this.model = source["model"];
 	        this.agent_id = source["agent_id"];
 	        this.regenerate_group_id = source["regenerate_group_id"];
+	        this.ignore_context = source["ignore_context"];
 	    }
 	}
 	export class WebDAVConfig {

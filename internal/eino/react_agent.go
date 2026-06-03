@@ -171,11 +171,13 @@ func RunTaskAgent(
 		for {
 			msg, err := stream.Recv()
 			if err != nil {
+				slog.Info("TaskAgent stream ended", "error", err)
 				break // io.EOF or ctx cancel
 			}
 			if msg == nil {
 				continue
 			}
+			slog.Info("TaskAgent recv", "role", msg.Role, "content_len", len(msg.Content), "reasoning_len", len(msg.ReasoningContent), "tool_calls", len(msg.ToolCalls))
 			if msg.ReasoningContent != "" {
 				ch <- TaskStep{Type: "thinking", Content: msg.ReasoningContent}
 			}

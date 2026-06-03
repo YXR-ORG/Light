@@ -51,6 +51,7 @@ type StreamTaskRequest struct {
 	Model             string `json:"model"`
 	AgentID           string `json:"agent_id"`
 	RegenerateGroupID string `json:"regenerate_group_id"`
+	IgnoreContext     bool   `json:"ignore_context"`
 }
 
 // StreamTask 启动 task 模式 ReAct Agent，通过 task:step events 推送推理链。
@@ -126,25 +127,28 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	})
 
 	// 加载历史，只保留 task 模式的消息（过滤 chat/knowledge 模式的历史，避免污染 agent 行为）
-	history, err := storage.GetLatestMessages(req.ConversationID)
-	if err != nil {
-		slog.Warn("StreamTask: load history failed", "error", err)
-	}
-	// 过滤：只保留 mode=task 或 mode='' 的消息（空 mode 是旧数据兼容）
-	var taskHistory []storage.Message
-	for _, m := range history {
-		if m.Mode == "task" || m.Mode == "" {
-			taskHistory = append(taskHistory, m)
+	var einoHistory []*schema.Message
+	if !req.IgnoreContext {
+		history, err := storage.GetLatestMessages(req.ConversationID)
+		if err != nil {
+			slog.Warn("StreamTask: load history failed", "error", err)
+		}
+		var taskHistory []storage.Message
+		for _, m := range history {
+			if m.Mode == "task" || m.Mode == "" {
+				taskHistory = append(taskHistory, m)
+			}
+		}
+		einoHistory = historyToEinoMsgs(taskHistory)
+		// 移除最后一条 user 消息（本轮，已单独传入 userMsg）
+		if len(einoHistory) > 0 {
+			last := einoHistory[len(einoHistory)-1]
+			if last.Role == "user" {
+				einoHistory = einoHistory[:len(einoHistory)-1]
+			}
 		}
 	}
-	// 移除最后一条 user 消息（本轮，已单独传入 userMsg）
-	einoHistory := historyToEinoMsgs(taskHistory)
-	if len(einoHistory) > 0 {
-		last := einoHistory[len(einoHistory)-1]
-		if last.Role == "user" {
-			einoHistory = einoHistory[:len(einoHistory)-1]
-		}
-	}
+	slog.Info("StreamTask: history", "len", len(einoHistory), "ignore_context", req.IgnoreContext)
 
 	// BashTool emitter（通道注入在 RunTaskAgent 内部）
 	var bashTool *eino.BashTool

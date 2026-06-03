@@ -105,6 +105,16 @@ export const useChatStore = defineStore('chat', () => {
     streamThinking.value = ''
   }
 
+  const taskCutoffActive = ref(false)
+
+  function toggleTaskContextCutoff() {
+    taskCutoffActive.value = !taskCutoffActive.value
+  }
+
+  function resetTaskCutoff() {
+    taskCutoffActive.value = false
+  }
+
   function toggleContextCutoff() {
     if (contextCutoffId.value !== null) {
       contextCutoffId.value = null
@@ -120,9 +130,9 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     conversations, currentConvId, messages, streaming, streamContent, streamThinking,
-    contextCutoffId, activeAgentId, providerMap,
+    contextCutoffId, activeAgentId, providerMap, taskCutoffActive,
     setConversations, setCurrentConv, setMessages, appendMessage,
     setStreaming, appendStream, appendThinking, finishStream, resetStream,
-    toggleContextCutoff, setActiveAgent, setProviderMap,
+    toggleContextCutoff, toggleTaskContextCutoff, resetTaskCutoff, setActiveAgent, setProviderMap,
   }
 })
