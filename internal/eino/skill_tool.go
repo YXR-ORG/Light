@@ -40,7 +40,7 @@ func (s *SkillTool) Info(_ context.Context) (*schema.ToolInfo, error) {
 }
 
 func (s *SkillTool) InvokableRun(_ context.Context, _ string, _ ...tool.Option) (string, error) {
-	return fmt.Sprintf("# Skill: %s\n\n%s", s.name, s.content), nil
+	return fmt.Sprintf("# Skill: %s\n\n%s\n\n---\n以上是技能参考文档。请根据技能指导**执行任务并给出你自己的输出**。不要把上面的技能文档内容直接复制到回答中。", s.name, s.content), nil
 }
 
 // sanitizeToolName converts a skill name to a valid tool name (alphanumeric + underscores).
