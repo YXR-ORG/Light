@@ -267,6 +267,77 @@ function toolIcon(name?: string) {
 /* AI 消息 */
 .task-msg--assistant { align-items: flex-start; width: 100%; }
 
+/* ── Markdown 渲染样式（与 chat 模式一致） ── */
+.markdown-body {
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  word-break: break-word;
+  color: var(--color-text);
+}
+.markdown-body :deep(p) { margin: 0 0 var(--space-2); }
+.markdown-body :deep(p:last-child) { margin-bottom: 0; }
+.markdown-body :deep(h1) { font-size: var(--text-xl); font-weight: 700; margin: var(--space-4) 0 var(--space-2); line-height: 1.3; }
+.markdown-body :deep(h2) { font-size: var(--text-lg); font-weight: 600; margin: var(--space-3) 0 var(--space-2); }
+.markdown-body :deep(h3) { font-size: var(--text-base); font-weight: 600; margin: var(--space-2) 0 var(--space-1); }
+.markdown-body :deep(ul), .markdown-body :deep(ol) { padding-left: var(--space-5); margin: var(--space-1) 0 var(--space-2); }
+.markdown-body :deep(li) { margin: 2px 0; }
+.markdown-body :deep(li > p) { margin: 0; }
+.markdown-body :deep(code) {
+  background: var(--color-paper-3);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: oklch(0.45 0.15 25);
+}
+.markdown-body :deep(pre) {
+  background: oklch(0.14 0 0);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  margin: var(--space-2) 0;
+}
+.markdown-body :deep(pre code) {
+  background: none;
+  padding: var(--space-3) var(--space-4);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: oklch(0.88 0 0);
+}
+.markdown-body :deep(.hljs-keyword) { color: oklch(0.75 0.15 290); }
+.markdown-body :deep(.hljs-string) { color: oklch(0.75 0.15 145); }
+.markdown-body :deep(.hljs-comment) { color: oklch(0.55 0 0); font-style: italic; }
+.markdown-body :deep(.hljs-number) { color: oklch(0.75 0.15 55); }
+.markdown-body :deep(.hljs-function) { color: oklch(0.75 0.12 220); }
+.markdown-body :deep(.hljs-title) { color: oklch(0.75 0.12 220); }
+.markdown-body :deep(.hljs-built_in) { color: oklch(0.7 0.1 200); }
+.markdown-body :deep(.hljs-type) { color: oklch(0.75 0.12 55); }
+.markdown-body :deep(.hljs-attr) { color: oklch(0.75 0.1 200); }
+.markdown-body :deep(.hljs-variable) { color: oklch(0.88 0 0); }
+.markdown-body :deep(blockquote) {
+  border-left: 3px solid var(--color-accent);
+  padding: var(--space-1) var(--space-3);
+  color: var(--color-text-2);
+  margin: var(--space-2) 0;
+  background: var(--color-accent-soft);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.markdown-body :deep(table) { border-collapse: collapse; margin: var(--space-2) 0; width: 100%; }
+.markdown-body :deep(th), .markdown-body :deep(td) {
+  border: 1px solid var(--color-border);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+.markdown-body :deep(th) { background: var(--color-paper-3); font-weight: 600; }
+.markdown-body :deep(tr:nth-child(even)) { background: var(--color-paper-2); }
+.markdown-body :deep(a) { color: var(--color-accent); text-decoration: none; border-bottom: 1px solid var(--color-accent-soft); }
+.markdown-body :deep(a:hover) { border-bottom-color: var(--color-accent); }
+.markdown-body :deep(hr) { border: none; border-top: 1px solid var(--color-border); margin: var(--space-3) 0; }
+.markdown-body :deep(strong) { font-weight: 600; }
+.markdown-body :deep(em) { font-style: italic; color: var(--color-text-2); }
+
 /* ── 推理链整体折叠 ── */
 .task-chain {
   width: 100%;
