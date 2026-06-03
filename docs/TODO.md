@@ -1,6 +1,6 @@
 # TODO 列表
 
-> 最后更新：2026-06-02
+> 最后更新：2026-06-03
 
 所有待办、进行中、已完成的功能规划统一在此维护。
 
@@ -98,3 +98,16 @@
 **问题**：当前知识模式只能选一个知识库，跨知识库问答不支持。
 
 **方案**：输入框知识库选择器改为多选，`search_knowledge` tool 遍历多个 Store 合并结果。
+
+---
+
+### ✅ TODO-APP-4：对话模式和知识库选择持久化（已完成 v1.2.2）
+
+**问题**：`chatMode`（chat/knowledge）和 `selectedKBID` 是纯前端状态，切换对话后丢失。
+
+**实现**：
+- `Conversation` 表新增 `mode`（默认 `chat`）和 `knowledge_base_id` 字段
+- AutoMigrate 自动加列，旧数据库无感升级
+- 新增 `UpdateConversationMode` storage 函数 + `SetMode` handler
+- `InputArea` 监听 `currentConvId` 切换，从 `conv.mode` / `conv.knowledge_base_id` 恢复前端状态
+- `selectMode()` / `selectKB()` 修改时立即调用 `SetMode` 写库（乐观更新本地 conv 对象）
