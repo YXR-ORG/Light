@@ -159,32 +159,58 @@ func RunTaskAgent(
 			}
 		}()
 
-		stream, err := agentInst.Stream(ctx, msgs,
-			agent.WithComposeOptions(compose.WithCallbacks(cb)))
-		if err != nil {
-			slog.Error("TaskAgent stream error", "error", err)
+		// 使用 WithMessageFuture 获取每轮 LLM 的流式输出
+		futureOpt, future := react.WithMessageFuture()
+
+		// 在 goroutine 里启动 agent（Stream 会阻塞直到全部完成）
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := agentInst.Stream(ctx, msgs,
+				agent.WithComposeOptions(compose.WithCallbacks(cb)),
+				futureOpt,
+			)
+			errCh <- err
+		}()
+
+		// 逐轮读取流式输出
+		streams := future.GetMessageStreams()
+		for {
+			sr, ok, err := streams.Next()
+			if err != nil {
+				slog.Error("TaskAgent stream iterator error", "error", err)
+				ch <- TaskStep{Type: "error", Error: err.Error()}
+				return
+			}
+			if !ok {
+				break // 所有轮次完成
+			}
+
+			// 读取该轮的流式 delta
+			for {
+				msg, err := sr.Recv()
+				if err != nil {
+					break // 该轮 EOF
+				}
+				if msg == nil {
+					continue
+				}
+				if msg.ReasoningContent != "" {
+					ch <- TaskStep{Type: "thinking", Content: msg.ReasoningContent}
+				}
+				if msg.Content != "" {
+					ch <- TaskStep{Type: "content", Content: sanitizeContent(msg.Content)}
+				}
+			}
+			sr.Close()
+		}
+
+		// 等待 agent 完成
+		if err := <-errCh; err != nil {
+			slog.Error("TaskAgent error", "error", err)
 			ch <- TaskStep{Type: "error", Error: err.Error()}
 			return
 		}
-		defer stream.Close()
 
-		for {
-			msg, err := stream.Recv()
-			if err != nil {
-				slog.Info("TaskAgent stream ended", "error", err)
-				break // io.EOF or ctx cancel
-			}
-			if msg == nil {
-				continue
-			}
-			slog.Info("TaskAgent recv", "role", msg.Role, "content_len", len(msg.Content), "reasoning_len", len(msg.ReasoningContent), "tool_calls", len(msg.ToolCalls))
-			if msg.ReasoningContent != "" {
-				ch <- TaskStep{Type: "thinking", Content: msg.ReasoningContent}
-			}
-			if msg.Content != "" {
-				ch <- TaskStep{Type: "content", Content: sanitizeContent(msg.Content)}
-			}
-		}
 		ch <- TaskStep{Type: "done"}
 	}()
 
