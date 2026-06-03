@@ -52,10 +52,22 @@ const finalHtml = computed(() => {
   return marked(finalContent.value) as string
 })
 
-// 推理链步骤（非 content/done/error）
-const chainSteps = computed(() =>
-  props.steps.filter(s => s.type !== 'content' && s.type !== 'done')
-)
+// 推理链步骤（非 content/done），合并连续同类型步骤
+const chainSteps = computed(() => {
+  const raw = props.steps.filter(s => s.type !== 'content' && s.type !== 'done')
+  if (raw.length === 0) return []
+  // 合并连续相同 type 的步骤（thinking、tool_result、bash_output 的流式 delta）
+  const merged: TaskStep[] = []
+  for (const step of raw) {
+    const last = merged[merged.length - 1]
+    if (last && last.type === step.type && ['thinking', 'bash_output'].includes(step.type)) {
+      last.content = (last.content || '') + (step.content || '')
+    } else {
+      merged.push({ ...step })
+    }
+  }
+  return merged
+})
 
 // 思考步骤折叠
 const thinkingOpen = ref(false)
