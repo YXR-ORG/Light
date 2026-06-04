@@ -10,11 +10,9 @@ permissions:
 
 env:
   MODEL_NAME: all-MiniLM-L6-v2
-  MODEL_URL: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
-  TOKENIZER_URL: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json
-  TOKENIZER_CONFIG_URL: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer_config.json
-  VOCAB_URL: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt
-  CONFIG_URL: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json
+  # 使用 hf-mirror.com 镜像站避免 CI 限流
+  HF_BASE: https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main
+  MODEL_CACHE_KEY: hf-all-minilm-l6-v2-v1
 
 jobs:
   build-mac:
@@ -40,14 +38,22 @@ jobs:
         run: npm install
         working-directory: frontend
 
+      - name: Cache embedding model
+        id: cache-model
+        uses: actions/cache@v4
+        with:
+          path: build/models/${{ env.MODEL_NAME }}
+          key: ${{ env.MODEL_CACHE_KEY }}
+
       - name: Download embedding model
+        if: steps.cache-model.outputs.cache-hit != 'true'
         run: |
           mkdir -p build/models/${{ env.MODEL_NAME }}
-          curl -L --retry 3 -o build/models/${{ env.MODEL_NAME }}/model.onnx            "${{ env.MODEL_URL }}"
-          curl -L --retry 3 -o build/models/${{ env.MODEL_NAME }}/tokenizer.json        "${{ env.TOKENIZER_URL }}"
-          curl -L --retry 3 -o build/models/${{ env.MODEL_NAME }}/tokenizer_config.json "${{ env.TOKENIZER_CONFIG_URL }}"
-          curl -L --retry 3 -o build/models/${{ env.MODEL_NAME }}/vocab.txt             "${{ env.VOCAB_URL }}"
-          curl -L --retry 3 -o build/models/${{ env.MODEL_NAME }}/config.json           "${{ env.CONFIG_URL }}"
+          curl --fail --show-error -L --retry 5 --retry-delay 3 -o build/models/${{ env.MODEL_NAME }}/model.onnx            "${{ env.HF_BASE }}/onnx/model.onnx"
+          curl --fail --show-error -L --retry 5 --retry-delay 3 -o build/models/${{ env.MODEL_NAME }}/tokenizer.json        "${{ env.HF_BASE }}/tokenizer.json"
+          curl --fail --show-error -L --retry 5 --retry-delay 3 -o build/models/${{ env.MODEL_NAME }}/tokenizer_config.json "${{ env.HF_BASE }}/tokenizer_config.json"
+          curl --fail --show-error -L --retry 5 --retry-delay 3 -o build/models/${{ env.MODEL_NAME }}/vocab.txt             "${{ env.HF_BASE }}/vocab.txt"
+          curl --fail --show-error -L --retry 5 --retry-delay 3 -o build/models/${{ env.MODEL_NAME }}/config.json           "${{ env.HF_BASE }}/config.json"
           echo "Model files:"
           ls -lh build/models/${{ env.MODEL_NAME }}/
 
@@ -97,20 +103,40 @@ jobs:
         run: npm install
         working-directory: frontend
 
+      - name: Cache embedding model
+        id: cache-model
+        uses: actions/cache@v4
+        with:
+          path: build/models/${{ env.MODEL_NAME }}
+          key: ${{ env.MODEL_CACHE_KEY }}
+
       - name: Download embedding model
+        if: steps.cache-model.outputs.cache-hit != 'true'
         run: |
           New-Item -ItemType Directory -Force -Path "build/models/${{ env.MODEL_NAME }}"
+          $base = "${{ env.HF_BASE }}"
           $files = @{
-            "model.onnx"            = "${{ env.MODEL_URL }}"
-            "tokenizer.json"        = "${{ env.TOKENIZER_URL }}"
-            "tokenizer_config.json" = "${{ env.TOKENIZER_CONFIG_URL }}"
-            "vocab.txt"             = "${{ env.VOCAB_URL }}"
-            "config.json"           = "${{ env.CONFIG_URL }}"
+            "model.onnx"            = "$base/onnx/model.onnx"
+            "tokenizer.json"        = "$base/tokenizer.json"
+            "tokenizer_config.json" = "$base/tokenizer_config.json"
+            "vocab.txt"             = "$base/vocab.txt"
+            "config.json"           = "$base/config.json"
           }
           foreach ($name in $files.Keys) {
             $dest = "build/models/${{ env.MODEL_NAME }}/$name"
-            Invoke-WebRequest -Uri $files[$name] -OutFile $dest -MaximumRetryCount 3
-            Write-Host "$name downloaded: $((Get-Item $dest).Length) bytes"
+            $url  = $files[$name]
+            $ok   = $false
+            for ($i = 0; $i -lt 5 -and -not $ok; $i++) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile $dest -TimeoutSec 120
+                $ok = $true
+                Write-Host "$name downloaded: $((Get-Item $dest).Length) bytes"
+              } catch {
+                Write-Host "Retry $($i+1) for $name : $_"
+                Start-Sleep -Seconds 3
+              }
+            }
+            if (-not $ok) { throw "Failed to download $name after 5 attempts" }
           }
         shell: pwsh
 
