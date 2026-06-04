@@ -27,8 +27,13 @@ import (
 //   - FileTool x4（workDir 限定）
 //
 // 任何单个资源加载失败只记 warn 日志，不中断整体。
-func BuildTaskTools(ctx context.Context, workDir string, emitter BashStepEmitter) []tool.BaseTool {
+func BuildTaskTools(ctx context.Context, workDir string, emitter BashStepEmitter, planEnabled bool) []tool.BaseTool {
 	var tools []tool.BaseTool
+
+	// 0. Plan 工具（仅在全局开关开启时）
+	if planEnabled {
+		tools = append(tools, NewPlanTool())
+	}
 
 	// 1. MCP servers（全部已启用的）
 	tools = append(tools, loadAllMCPTools(ctx)...)

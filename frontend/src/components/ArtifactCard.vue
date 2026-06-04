@@ -62,10 +62,35 @@ function onReveal() {
     OpenPath(a.value.abs_path, true).catch((e) => console.warn('定位文件失败', e))
   }
 }
+
+// plan 进度
+const planSteps = computed(() => a.value.steps || [])
+const planDone = computed(() => planSteps.value.filter(s => s.status === 'done').length)
+function stepIcon(status?: string) {
+  if (status === 'done') return '✓'
+  if (status === 'in_progress') return '◐'
+  return '○'
+}
 </script>
 
 <template>
-  <div class="artifact-card" :title="a.type === 'file' ? '点击打开文件' : '点击打开'" @click="onOpen">
+  <!-- plan：待办列表 -->
+  <div v-if="a.type === 'plan'" class="plan-card">
+    <div class="plan-card__head">
+      <span class="plan-card__icon">🗂️</span>
+      <span class="plan-card__title">执行计划</span>
+      <span class="plan-card__progress">{{ planDone }}/{{ planSteps.length }}</span>
+    </div>
+    <ul class="plan-card__steps">
+      <li v-for="(s, i) in planSteps" :key="i" class="plan-step" :class="s.status">
+        <span class="plan-step__icon">{{ stepIcon(s.status) }}</span>
+        <span class="plan-step__text">{{ s.content }}</span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- file / url / image：单卡片 -->
+  <div v-else class="artifact-card" :title="a.type === 'file' ? '点击打开文件' : '点击打开'" @click="onOpen">
     <span class="artifact-card__icon">{{ icon }}</span>
     <div class="artifact-card__info">
       <span class="artifact-card__name">
@@ -116,4 +141,39 @@ function onReveal() {
   display: flex; align-items: center; transition: all var(--duration-fast);
 }
 .artifact-card__reveal:hover { color: var(--color-accent); background: var(--color-paper); }
+
+/* plan 待办卡片 */
+.plan-card {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-paper-2);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.plan-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-paper-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.plan-card__icon { font-size: 15px; }
+.plan-card__title { font-size: 13px; font-weight: 600; color: var(--color-text); flex: 1; }
+.plan-card__progress { font-size: 12px; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+.plan-card__steps { list-style: none; margin: 0; padding: 6px 0; }
+.plan-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.plan-step__icon { flex-shrink: 0; width: 14px; text-align: center; color: var(--color-text-3); }
+.plan-step__text { color: var(--color-text-2); word-break: break-word; }
+.plan-step.done .plan-step__icon { color: oklch(0.6 0.15 150); }
+.plan-step.done .plan-step__text { color: var(--color-text-3); text-decoration: line-through; }
+.plan-step.in_progress .plan-step__icon { color: var(--color-accent); }
+.plan-step.in_progress .plan-step__text { color: var(--color-text); font-weight: 500; }
 </style>

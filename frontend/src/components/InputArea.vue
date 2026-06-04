@@ -351,6 +351,8 @@ async function sendTask(text: string) {
 
   input.value = ''
   store.resetStream()
+  const sentAttachments = [...attachments.value]
+  attachments.value = []
 
   // 发送任务请求（后端 task:step 事件驱动 ChatView 渲染）
   store.setStreaming(true)
@@ -365,6 +367,7 @@ async function sendTask(text: string) {
       model: currentModel.value || 'gpt-4o',
       work_dir: workDir.value,
       ignore_context: ignoreCtx,
+      attachments: sentAttachments,
     } as any)
   } catch (e: any) {
     const msg = e?.message || e?.Message || String(e)

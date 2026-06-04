@@ -22,21 +22,39 @@ import (
 
 // TaskStep 是 task 模式推理链中的一个步骤，对应前端 task:step event。
 type TaskStep struct {
-	ConvID     string `json:"conv_id"`     // 会话 ID，前端用于过滤
-	Type       string `json:"type"`        // thinking|tool_call|tool_result|bash_confirm|bash_output|content|content_note|content_rollback|notice|done|error
-	Content    string `json:"content"`     // LLM 思考/回答片段
-	ToolName   string `json:"tool_name"`   // tool_call / tool_result
-	ToolArgs   string `json:"tool_args"`   // tool_call：JSON args
-	ToolResult string `json:"tool_result"` // tool_result：执行结果
-	ConfirmID  string `json:"confirm_id"`  // bash_confirm：唯一 ID
-	Cmd        string `json:"cmd"`         // bash_confirm / bash_output
-	Error      string `json:"error"`       // error
+	ConvID          string `json:"conv_id"`          // 会话 ID，前端用于过滤
+	Type            string `json:"type"`             // thinking|tool_call|tool_result|bash_confirm|bash_output|content|content_note|content_rollback|notice|done|error
+	Content         string `json:"content"`          // LLM 思考/回答片段
+	ToolName        string `json:"tool_name"`        // tool_call / tool_result
+	ToolArgs        string `json:"tool_args"`        // tool_call：JSON args
+	ToolResult      string `json:"tool_result"`      // tool_result：执行结果
+	ConfirmID       string `json:"confirm_id"`       // bash_confirm：唯一 ID
+	Cmd             string `json:"cmd"`              // bash_confirm / bash_output
+	Error           string `json:"error"`            // error
+	AttachmentsMeta string `json:"attachments_meta"` // user_msg：附件 meta JSON
 }
 
 // taskSystemPrompt 构建 task 模式的 system prompt。
-func taskSystemPrompt(workDir string) string {
+// planEnabled 为 true 时注入 plan 指令（复杂任务先列计划）。
+func taskSystemPrompt(workDir string, planEnabled bool) string {
+	planHeader := ""
+	planSection := ""
+	planWorkflow := "1. 收到任务 → 直接调工具（不要先说话）"
+	if planEnabled {
+		planHeader = `
+⚠️ **计划模式已开启：收到多步骤任务时，你的第一个工具调用必须是 update_plan，列出所有执行步骤。**
+`
+		planSection = `
+### 7. 计划模式（强制要求）
+- **收到任务后，第一步必须调用 update_plan**，列出完整的执行计划（步骤 >= 2 时）
+- 每完成一步，立即再次调用 update_plan，把该步改为 done，下一步改为 in_progress
+- 步骤描述要具体：不写"搜索信息"，要写"搜索XXX的YYY"；不写"处理数据"，要写"读取file.csv并筛选ZZZ字段"
+- **只有真正的单步骤任务（一个工具调用就能完成）才跳过 update_plan**
+`
+		planWorkflow = "1. 收到任务 → **先调 update_plan 列出计划** → 再执行第一步工具"
+	}
 	return fmt.Sprintf(`你是 Light 的任务执行智能体。你的工作是**动手执行**，不是**口头描述**。
-
+%s
 工作目录：%s
 当前时间：%s
 
@@ -75,13 +93,14 @@ func taskSystemPrompt(workDir string) string {
 - 最终总结：简短有力，告诉用户你做了什么、产出了什么
 - 回答长度控制在合理范围（过长的工具文档不要原样照抄）
 
-### 6. 默认不写文件（重要）
-- **默认情况下，直接在回答中给出结果**，不要调用 write_file
-- 只有当用户**明确要求**"保存到文件 / 写入文件 / 生成XX文件 / 导出 / 创建文件"等，才调用 write_file
-- 用户说"帮我写一段代码""给我一个方案""分析一下" → 这些都是要你**在对话里回答**，不是写文件
-- 用户说"把结果保存到 result.md""生成一个 config.json" → 这才调用 write_file
-- 拿不准时，优先在回答中直接输出，而不是落地成文件
-
+### 6. 默认不操作本地文件（重要）
+- **默认情况下，直接在回答中给出结果**，不要主动调用 read_file / write_file / list_dir
+- 只有当用户**明确要求**操作文件，或**执行步骤本身需要**（如修复 bug、写代码到指定路径），才调用文件工具
+- 用户说"帮我写一段代码""给我一个方案""分析一下" → 在对话里直接回答，不读也不写文件
+- 用户说"把结果保存到 result.md" / "查看 config.json" → 这才调用 write_file / read_file
+- **用户上传了附件**：附件内容已在消息里，直接使用，不要再调 read_file 读同名文件
+- 拿不准时，优先在回答中直接输出，而不是主动触碰工作目录
+%s
 
 ## 可用工具
 所有已配置的工具都在你的工具列表中，包括：
@@ -90,12 +109,24 @@ func taskSystemPrompt(workDir string) string {
 - 知识库检索、技能、网络搜索、MCP 工具
 
 ## 工作流
-1. 收到任务 → 直接调工具（不要先说话）
+%s
 2. 工具返回结果 → 根据结果决定下一步工具
 3. 信息充分后 → 输出简明总结
 
 记住：**你不是一个只会说话的助手，你是一个能动手的智能体。用工具证明你的能力。**
-`, workDir, time.Now().Format("2006-01-02 15:04"))
+`, planHeader, workDir, time.Now().Format("2006-01-02 15:04"), planSection, planWorkflow)
+}
+
+func appendTaskPlanInstruction(msg *schema.Message) {
+	const instruction = "\n\n[系统要求：这是多步骤任务，你的第一个工具调用必须是 update_plan，列出完整执行计划。]"
+	if len(msg.UserInputMultiContent) > 0 {
+		msg.UserInputMultiContent = append(msg.UserInputMultiContent, schema.MessageInputPart{
+			Type: schema.ChatMessagePartTypeText,
+			Text: instruction,
+		})
+		return
+	}
+	msg.Content += instruction
 }
 
 // RunTaskAgent 启动 eino ReAct Agent，返回 TaskStep channel（缓冲 64）。
@@ -110,6 +141,8 @@ func RunTaskAgent(
 	workDir string,
 	history []*schema.Message,
 	userMsg string,
+	userInput *schema.Message,
+	planEnabled bool,
 ) (<-chan TaskStep, error) {
 	if llm == nil {
 		return nil, fmt.Errorf("task agent: LLM 未配置")
@@ -141,7 +174,7 @@ func RunTaskAgent(
 	}
 
 	// 构建 MessageModifier：注入 system prompt
-	sysPrompt := taskSystemPrompt(workDir)
+	sysPrompt := taskSystemPrompt(workDir, planEnabled)
 	modifier := react.NewPersonaModifier(sysPrompt)
 
 	// 构建 Callback：监听 model stream → 推送 thinking/content steps
@@ -226,10 +259,13 @@ func RunTaskAgent(
 	// 构建消息列表
 	msgs := make([]*schema.Message, 0, len(history)+1)
 	msgs = append(msgs, history...)
-	msgs = append(msgs, &schema.Message{
-		Role:    schema.User,
-		Content: userMsg,
-	})
+	if userInput == nil {
+		userInput = &schema.Message{Role: schema.User, Content: userMsg}
+	}
+	if planEnabled {
+		appendTaskPlanInstruction(userInput)
+	}
+	msgs = append(msgs, userInput)
 
 	go func() {
 		defer close(ch)

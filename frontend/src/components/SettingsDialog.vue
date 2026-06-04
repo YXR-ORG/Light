@@ -339,7 +339,7 @@ function cancelConfirm() {
 }
 
 onMounted(async () => {
-  const [engine, tavily, exa, brave, searxng, cfg, taskWorkDir, taskBlacklist] = await Promise.all([
+  const [engine, tavily, exa, brave, searxng, cfg, taskWorkDir, taskBlacklist, planEnabled] = await Promise.all([
     GetSetting('search_engine').catch(() => ''),
     GetSetting('tavily_api_key').catch(() => ''),
     GetSetting('exa_api_key').catch(() => ''),
@@ -348,6 +348,7 @@ onMounted(async () => {
     GetConfig().catch(() => null),
     GetSetting('task_default_work_dir').catch(() => ''),
     GetSetting('task_bash_blacklist').catch(() => ''),
+    GetSetting('task_plan_enabled').catch(() => ''),
   ])
   searchEngine.value = engine || 'tavily'
   searchKeys.value = { tavily, exa, brave, searxng }
@@ -358,11 +359,13 @@ onMounted(async () => {
   }
   taskDefaultWorkDir.value = taskWorkDir || ''
   taskBashBlacklist.value = taskBlacklist || defaultBashBlacklist
+  taskPlanEnabled.value = planEnabled === 'true'
 })
 
 // ── Task 模式设置 ──────────────────────────────────────────────────
 const taskDefaultWorkDir = ref('')
 const taskBashBlacklist = ref('')
+const taskPlanEnabled = ref(false)
 const taskSettingsSaved = ref(false)
 
 const defaultBashBlacklist = `rm -rf /*
@@ -380,6 +383,7 @@ async function saveTaskSettings() {
   await Promise.all([
     SetSetting('task_default_work_dir', taskDefaultWorkDir.value),
     SetSetting('task_bash_blacklist', taskBashBlacklist.value),
+    SetSetting('task_plan_enabled', taskPlanEnabled.value ? 'true' : 'false'),
   ])
   taskSettingsSaved.value = true
   setTimeout(() => { taskSettingsSaved.value = false }, 2000)
@@ -679,6 +683,17 @@ function formatSize(bytes: number): string {
                     <button class="btn btn-secondary" @click="pickDefaultWorkDir" style="white-space:nowrap">
                       选择目录
                     </button>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label>Plan 模式</label>
+                  <div style="display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-1)">
+                    <label class="toggle-sm" title="开启后复杂任务会先列出执行计划">
+                      <input type="checkbox" v-model="taskPlanEnabled" />
+                      <span class="slider-sm" />
+                    </label>
+                    <span class="field-hint" style="margin-top:0">开启后，复杂任务 Agent 会先调用 <code>update_plan</code> 列出计划并逐步更新状态；简单任务自动跳过计划步骤。</span>
                   </div>
                 </div>
 

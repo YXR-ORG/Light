@@ -48,14 +48,15 @@ func (h *TaskHandler) SetContext(ctx context.Context) {
 
 // StreamTaskRequest 前端发送给 StreamTask 的请求体。
 type StreamTaskRequest struct {
-	ConversationID    string `json:"conversation_id"`
-	Content           string `json:"content"`
-	WorkDir           string `json:"work_dir"`
-	Provider          string `json:"provider"`
-	Model             string `json:"model"`
-	AgentID           string `json:"agent_id"`
-	RegenerateGroupID string `json:"regenerate_group_id"`
-	IgnoreContext     bool   `json:"ignore_context"`
+	ConversationID    string       `json:"conversation_id"`
+	Content           string       `json:"content"`
+	WorkDir           string       `json:"work_dir"`
+	Provider          string       `json:"provider"`
+	Model             string       `json:"model"`
+	AgentID           string       `json:"agent_id"`
+	RegenerateGroupID string       `json:"regenerate_group_id"`
+	IgnoreContext     bool         `json:"ignore_context"`
+	Attachments       []Attachment `json:"attachments"`
 }
 
 // StreamTask 启动 task 模式 ReAct Agent，通过 task:step events 推送推理链。
@@ -121,13 +122,28 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	if conv, err := storage.GetConversation(req.ConversationID); err == nil {
 		needTitle = conv.Title == "New Chat" || conv.Title == ""
 	}
-	if _, err := storage.SaveTaskMessage(req.ConversationID, "user", req.Content); err != nil {
+	attachmentsMeta := ""
+	if len(req.Attachments) > 0 {
+		type meta struct {
+			Name     string `json:"name"`
+			MimeType string `json:"mime_type"`
+		}
+		metas := make([]meta, len(req.Attachments))
+		for i, a := range req.Attachments {
+			metas[i] = meta{Name: a.Name, MimeType: a.MimeType}
+		}
+		if b, err := json.Marshal(metas); err == nil {
+			attachmentsMeta = string(b)
+		}
+	}
+	if _, err := storage.SaveTaskMessageWithAttachments(req.ConversationID, "user", req.Content, attachmentsMeta); err != nil {
 		slog.Warn("StreamTask: save user message failed", "error", err)
 	}
 
 	// 发送 user_msg 事件，触发前端初始化流式 UI
 	runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{
 		ConvID: req.ConversationID, Type: "user_msg", Content: req.Content,
+		AttachmentsMeta: attachmentsMeta,
 	})
 
 	// 加载历史，只保留 task 模式的消息（过滤 chat/knowledge 模式的历史，避免污染 agent 行为）
@@ -154,13 +170,17 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	}
 	slog.Info("StreamTask: history", "len", len(einoHistory), "ignore_context", req.IgnoreContext)
 
+	// 读取全局 Plan 模式开关
+	planEnabled := storage.GetSettingWithDefault("task_plan_enabled", "false") == "true"
+	slog.Info("StreamTask: plan mode", "enabled", planEnabled)
+
 	// BashTool emitter（通道注入在 RunTaskAgent 内部）
 	var bashTool *eino.BashTool
 	tools := eino.BuildTaskTools(ctx, req.WorkDir, func(stepType, content, cmd, confirmID string) {
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{
 			ConvID: req.ConversationID, Type: stepType, Content: content, Cmd: cmd, ConfirmID: confirmID,
 		})
-	})
+	}, planEnabled)
 	// 找出 BashTool 引用
 	for _, t := range tools {
 		if bt, ok := t.(*eino.BashTool); ok {
@@ -186,7 +206,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 
 	// 启动 ReAct agent
 	slog.Info("StreamTask: starting RunTaskAgent", "workDir", req.WorkDir, "historyLen", len(einoHistory))
-	stepCh, err := eino.RunTaskAgent(ctx, llm, tools, bashTool, req.WorkDir, einoHistory, req.Content)
+	stepCh, err := eino.RunTaskAgent(ctx, llm, tools, bashTool, req.WorkDir, einoHistory, req.Content, buildUserMessage(req.Content, req.Attachments), planEnabled)
 	if err != nil {
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: err.Error()})
 		return err
@@ -198,24 +218,50 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	// 采集本轮产物（文件等），按去重键去重，done 时序列化存库
 	artifactMap := map[string]eino.Artifact{}
 	artifactOrder := []string{}
+	lastPlanKey := ""
 	collectArtifact := func(toolResult string) {
 		for _, a := range eino.ParseArtifacts(toolResult) {
-			key := a.AbsPath
-			if key == "" {
-				key = a.URL
-			}
-			if key == "" {
-				key = a.Title
+			key := ""
+			if a.Type == "plan" {
+				key = "plan:" + a.PlanID
+				if a.PlanID == "" {
+					key = "plan:default"
+				}
+				lastPlanKey = key
+			} else {
+				key = a.AbsPath
+				if key == "" {
+					key = a.URL
+				}
+				if key == "" {
+					key = a.Title
+				}
 			}
 			existing, ok := artifactMap[key]
-			// write 优先覆盖 read
+			// plan 始终保留最新；file 则 write 优先覆盖 read。
 			if !ok {
 				artifactMap[key] = a
 				artifactOrder = append(artifactOrder, key)
+			} else if a.Type == "plan" {
+				artifactMap[key] = a
 			} else if a.Action == "write" && existing.Action != "write" {
 				artifactMap[key] = a
 			}
 		}
+	}
+	completeLatestPlan := func() {
+		if lastPlanKey == "" {
+			return
+		}
+		completed, ok := eino.CompletePlanArtifact(artifactMap[lastPlanKey])
+		if !ok {
+			return
+		}
+		artifactMap[lastPlanKey] = completed
+		result := eino.EmbedArtifact("计划已完成", completed)
+		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{
+			ConvID: req.ConversationID, Type: "tool_result", ToolName: "update_plan", ToolResult: result,
+		})
 	}
 	artifactsJSON := func() string {
 		if len(artifactOrder) == 0 {
@@ -251,6 +297,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 		}
 		if step.Type == "done" {
 			hadDone = true
+			completeLatestPlan()
 			// 先保存 AI 回答到 DB，再发 done 事件，确保前端 loadTaskHistory 能读到数据
 			slog.Info("StreamTask: done received", "finalContent_len", len(finalContent), "convID", req.ConversationID)
 			if finalContent != "" {

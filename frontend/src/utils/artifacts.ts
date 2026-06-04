@@ -4,8 +4,13 @@
 // 前端从 tool_result 中解析这些标记，自动在“产物区”渲染对应卡片。
 // 新工具只要在后端 EmbedArtifact，前端零改动即可自动展示。
 
+export interface PlanStep {
+  content: string
+  status?: string   // pending | in_progress | done
+}
+
 export interface Artifact {
-  type: string          // file | image | url | ...（可扩展）
+  type: string          // file | image | url | plan | ...（可扩展）
   action?: string       // write | read（file 专用）
   title?: string        // 展示标题
   path?: string         // 相对路径（file）
@@ -13,6 +18,8 @@ export interface Artifact {
   url?: string          // 链接（url/image）
   bytes?: number        // 字节大小
   mime?: string         // MIME 类型
+  plan_id?: string      // plan 去重标识
+  steps?: PlanStep[]    // plan 步骤
 }
 
 const ARTIFACT_RE = /<!--ARTIFACT:([A-Za-z0-9+/=]*)-->/g
@@ -48,12 +55,19 @@ export function stripArtifacts(text?: string): string {
   return text.replace(ARTIFACT_RE, '').trim()
 }
 
-// 从多个 tool_result 收集产物，按去重键去重（file 用 abs_path，url 用 url，否则用 title）。
-// 同一文件若既被 read 又被 write，保留 write（产物优先于读取）。
+// 从多个 tool_result 收集产物，按去重键去重。
+//   - plan：按 plan_id 去重，总是保留最新一次（后者覆盖）
+//   - file：按 abs_path，write 优先覆盖 read
+//   - url/其他：按 url / title
 export function collectArtifacts(results: (string | undefined)[]): Artifact[] {
   const map = new Map<string, Artifact>()
   for (const r of results) {
     for (const a of parseArtifacts(r)) {
+      if (a.type === 'plan') {
+        // plan 始终保留最新（按 plan_id，无则用固定键）
+        map.set('plan:' + (a.plan_id || 'default'), a)
+        continue
+      }
       const key = a.abs_path || a.url || a.title || JSON.stringify(a)
       const existing = map.get(key)
       // write 优先覆盖 read

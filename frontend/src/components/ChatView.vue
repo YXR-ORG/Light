@@ -16,6 +16,7 @@ const taskListRef = ref<HTMLElement | null>(null)
 // 已完成的轮次（保留推理链，不清空）
 interface TaskRound {
   userContent: string
+  attachmentsMeta?: string
   steps: TaskStep[]
   assistantContent: string
   notice?: string    // 撞上限/死循环时的提示语
@@ -30,6 +31,7 @@ const taskHistoryMsgs = ref<storage.Message[]>([])
 const currentTaskSteps = ref<TaskStep[]>([])
 // 当前流式 task 对应的用户消息内容
 const currentTaskUserContent = ref('')
+const currentTaskAttachmentsMeta = ref('')
 // 流式内容累加
 const streamingContent = ref('')
 // 当前轮的提示语（撞上限/死循环）
@@ -64,6 +66,7 @@ watch(() => store.currentConvId, async () => {
   streamingContent.value = ''
   currentNotice.value = ''
   currentTaskUserContent.value = ''
+  currentTaskAttachmentsMeta.value = ''
   taskStreaming.value = false
   if (isTaskMode.value) await loadTaskHistory()
 }, { immediate: true })
@@ -85,6 +88,7 @@ interface TaskStepEvent {
   cmd?: string
   error?: string
   user_content?: string
+  attachments_meta?: string
 }
 
 function onTaskStep(evt: TaskStepEvent) {
@@ -93,6 +97,7 @@ function onTaskStep(evt: TaskStepEvent) {
     streamingContent.value = ''
     currentNotice.value = ''
     currentTaskUserContent.value = evt.user_content || evt.content || ''
+    currentTaskAttachmentsMeta.value = evt.attachments_meta || ''
     taskStreaming.value = true
     store.setStreaming(true)
     scrollTaskToBottom()
@@ -122,7 +127,11 @@ function onTaskStep(evt: TaskStepEvent) {
       // 兜底：按长度从尾部移除（chunk 拼接与聚合文本理论一致）
       streamingContent.value = streamingContent.value.slice(0, Math.max(0, streamingContent.value.length - seg.length))
     }
-    currentTaskSteps.value.push({ type: 'content_note', content: seg })
+    // 大段 tool-call 轮内容通常是模型误把“最终总结”伴随 update_plan 一起吐出。
+    // 已从正文回滚即可，不再塞进推理链，避免最终界面看起来像总结输出了两次。
+    if (seg.length <= 1200) {
+      currentTaskSteps.value.push({ type: 'content_note', content: seg })
+    }
     scrollTaskToBottom()
     return
   }
@@ -140,6 +149,7 @@ function onTaskStep(evt: TaskStepEvent) {
     // 把本轮推理链存入 completedRounds，永久显示
     completedRounds.value.push({
       userContent: currentTaskUserContent.value,
+      attachmentsMeta: currentTaskAttachmentsMeta.value,
       steps: [...currentTaskSteps.value],
       assistantContent: streamingContent.value,
       notice: currentNotice.value,
@@ -221,6 +231,7 @@ onUnmounted(() => {
             :user-content="msg.role === 'user' ? msg.content : undefined"
             :steps="msg.role === 'assistant' ? [{ type: 'content', content: msg.content }] : []"
             :artifacts-json="(msg as any).artifacts"
+            :attachments-meta="msg.role === 'user' ? (msg as any).attachments : undefined"
             :is-history="true"
           />
         </template>
@@ -231,6 +242,7 @@ onUnmounted(() => {
         <TaskMessageItem
           role="user"
           :user-content="round.userContent"
+          :attachments-meta="round.attachmentsMeta"
           :steps="[]"
         />
         <TaskMessageItem
@@ -254,6 +266,7 @@ onUnmounted(() => {
         <TaskMessageItem
           role="user"
           :user-content="currentTaskUserContent"
+          :attachments-meta="currentTaskAttachmentsMeta"
           :steps="[]"
         />
         <TaskMessageItem
@@ -341,10 +354,9 @@ onUnmounted(() => {
 .task-list {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-5) var(--space-6);
+  padding: var(--space-2) 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
   min-height: 0;
 }
 

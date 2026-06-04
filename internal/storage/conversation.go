@@ -145,7 +145,6 @@ func SaveTaskMessageWithArtifacts(convID, role, content, artifacts string) (*Mes
 	return m, err
 }
 
-
 func SaveRegeneratedMessage(convID, content, thinking, groupID string, genIndex int) (*Message, error) {
 	m := &Message{
 		ID:                NewID(),
@@ -207,4 +206,25 @@ func GetLatestMessages(convID string) ([]Message, error) {
 func UpdateConversationWorkDir(id, workDir string) error {
 	return DB.Model(&Conversation{}).Where("id = ?", id).
 		UpdateColumn("work_dir", workDir).Error
+}
+
+// SaveTaskMessageWithAttachments 保存 task 模式用户消息，附带附件 meta JSON。
+func SaveTaskMessageWithAttachments(convID, role, content, attachments string) (*Message, error) {
+	id := NewID()
+	m := &Message{
+		ID:                id,
+		ConversationID:    convID,
+		Role:              role,
+		Content:           content,
+		Attachments:       attachments,
+		Mode:              "task",
+		GenerationGroupID: id,
+		GenIndex:          0,
+	}
+	err := DB.Create(m).Error
+	if err == nil {
+		DB.Model(&Conversation{}).Where("id = ?", convID).
+			Update("updated_at", time.Now())
+	}
+	return m, err
 }

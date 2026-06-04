@@ -36,6 +36,7 @@ const props = defineProps<{
   streamingContent?: string
   notice?: string
   artifactsJson?: string  // 历史消息的产物 JSON（[]Artifact），优先于从 steps 收集
+  attachmentsMeta?: string // 附件元数据 JSON（[]{ name, mime_type }）
 }>()
 
 const userHtml = computed(() => {
@@ -110,6 +111,16 @@ const artifacts = computed<Artifact[]>(() => {
   return collectArtifacts(props.steps.filter(s => s.type === 'tool_result').map(s => s.tool_result))
 })
 
+// plan 产物放回复区顶部（执行导航），file 等产物放回复下方
+const planArtifacts = computed(() => artifacts.value.filter(a => a.type === 'plan'))
+const fileArtifacts = computed(() => artifacts.value.filter(a => a.type !== 'plan'))
+
+interface AttachmentMeta { name: string; mime_type: string }
+const attachmentMetas = computed<AttachmentMeta[]>(() => {
+  if (!props.attachmentsMeta) return []
+  try { return JSON.parse(props.attachmentsMeta) as AttachmentMeta[] } catch { return [] }
+})
+
 function toolIcon(name?: string) {
   if (!name) return '⚙'
   if (name === 'bash_exec') return '💻'
@@ -124,28 +135,44 @@ function toolIcon(name?: string) {
 </script>
 
 <template>
-  <!-- 用户消息 -->
-  <div v-if="role === 'user'" class="task-msg task-msg--user">
-    <div class="task-msg__bubble" v-html="userHtml" />
-  </div>
+  <div class="task-msg-row" :class="{ user: role === 'user', assistant: role === 'assistant' }">
+    <div class="task-msg-avatar">{{ role === 'user' ? 'U' : 'AI' }}</div>
+    <div class="task-msg-content">
+      <div class="task-msg-label">{{ role === 'user' ? '你' : 'AI 助手' }}</div>
 
-  <!-- AI task 消息 -->
-  <div v-else class="task-msg task-msg--assistant">
+      <!-- 用户消息 -->
+      <template v-if="role === 'user'">
+        <div v-if="attachmentMetas.length > 0" class="task-msg__attachments">
+          <span v-for="(a, i) in attachmentMetas" :key="i" class="task-attachment-chip">
+            <svg v-if="a.mime_type.startsWith('image/')" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>{{ a.name }}</span>
+          </span>
+        </div>
+        <div class="task-user-text" v-html="userHtml" />
+      </template>
 
-    <!-- 历史模式：渲染 markdown + 产物区 -->
+      <!-- AI task 消息 -->
+      <template v-else>
+
+    <!-- 历史模式：plan（顶部）+ markdown + 文件产物区 -->
     <template v-if="isHistory">
+      <ArtifactCard v-for="(p, i) in planArtifacts" :key="'plan-' + i" :artifact="p" />
       <div class="task-answer__bubble markdown-body" v-html="finalHtml" />
-      <div v-if="artifacts.length > 0" class="task-files">
+      <div v-if="fileArtifacts.length > 0" class="task-files">
         <div class="task-files__title">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          本次涉及的文件（{{ artifacts.length }}）
+          本次涉及的文件（{{ fileArtifacts.length }}）
         </div>
-        <ArtifactCard v-for="(art, i) in artifacts" :key="i" :artifact="art" />
+        <ArtifactCard v-for="(art, i) in fileArtifacts" :key="i" :artifact="art" />
       </div>
     </template>
 
     <!-- 流式模式 -->
     <template v-else>
+
+      <!-- 执行计划（置于顶部，作为执行导航） -->
+      <ArtifactCard v-for="(p, i) in planArtifacts" :key="'plan-' + i" :artifact="p" />
 
       <!-- 推理链：整体折叠 -->
       <div v-if="chainSteps.length" class="task-chain">
@@ -210,39 +237,64 @@ function toolIcon(name?: string) {
       </div>
 
       <!-- 本次涉及的产物（文件/链接/图片…）：从工具结果自动收集，常驻显示 -->
-      <div v-if="artifacts.length > 0" class="task-files">
+      <div v-if="fileArtifacts.length > 0" class="task-files">
         <div class="task-files__title">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          本次涉及的文件（{{ artifacts.length }}）
+          本次涉及的文件（{{ fileArtifacts.length }}）
         </div>
-        <ArtifactCard v-for="(art, i) in artifacts" :key="i" :artifact="art" />
+        <ArtifactCard v-for="(art, i) in fileArtifacts" :key="i" :artifact="art" />
       </div>
 
+      </template>
     </template>
+  </div>
   </div>
 </template>
 
 <style scoped>
-.task-msg {
+.task-msg-row {
   display: flex;
-  flex-direction: column;
-  margin: 6px 0;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+}
+.task-msg-row.assistant { background: var(--color-paper-2); }
+
+.task-msg-avatar {
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  border-radius: var(--radius-full);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  margin-top: 2px;
+}
+.user .task-msg-avatar { background: var(--color-accent); color: #fff; }
+.assistant .task-msg-avatar { background: var(--color-paper-4); color: var(--color-text-2); }
+
+.task-msg-content { flex: 1; min-width: 0; }
+.task-msg-label {
+  font-size: var(--text-xs); font-weight: 600;
+  color: var(--color-text-2); margin-bottom: var(--space-1);
 }
 
-/* 用户气泡 */
-.task-msg--user { align-items: flex-end; }
-.task-msg--user .task-msg__bubble {
-  background: var(--color-accent);
-  color: #fff;
-  border-radius: 16px 16px 4px 16px;
-  padding: 8px 14px;
-  max-width: 72%;
+.task-msg__attachments {
+  display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-2);
+}
+.task-attachment-chip {
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px var(--space-2);
+  background: var(--color-paper-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs); color: var(--color-text-3);
+  max-width: 200px; overflow: hidden;
+}
+.task-attachment-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-user-text {
   word-break: break-word;
   font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-text);
 }
-
-/* AI 消息 */
-.task-msg--assistant { align-items: flex-start; width: 100%; }
 
 /* ── Markdown 渲染样式（与 chat 模式一致） ── */
 .markdown-body {

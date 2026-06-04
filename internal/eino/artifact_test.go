@@ -48,3 +48,33 @@ func TestParseMultipleArtifacts(t *testing.T) {
 		t.Fatalf("want 2, got %d", len(got))
 	}
 }
+
+func TestCompletePlanMarksRemainingStepsDone(t *testing.T) {
+	plan := Artifact{
+		Type:   "plan",
+		Title:  "执行计划",
+		PlanID: "plan-1",
+		Steps: []PlanStep{
+			{Content: "收集资料", Status: "done"},
+			{Content: "整理输出总结", Status: "in_progress"},
+			{Content: "复查", Status: "pending"},
+		},
+	}
+
+	completed, ok := CompletePlanArtifact(plan)
+	if !ok {
+		t.Fatal("expected plan artifact to be completable")
+	}
+	for i, step := range completed.Steps {
+		if step.Status != "done" {
+			t.Fatalf("step %d status = %q, want done", i, step.Status)
+		}
+	}
+}
+
+func TestCompletePlanRejectsNonPlanArtifacts(t *testing.T) {
+	_, ok := CompletePlanArtifact(Artifact{Type: "file", Title: "x.md"})
+	if ok {
+		t.Fatal("file artifact should not be completable as plan")
+	}
+}

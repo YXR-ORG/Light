@@ -97,6 +97,7 @@ export namespace handler {
 	    agent_id: string;
 	    regenerate_group_id: string;
 	    ignore_context: boolean;
+	    attachments: Attachment[];
 	
 	    static createFrom(source: any = {}) {
 	        return new StreamTaskRequest(source);
@@ -112,7 +113,26 @@ export namespace handler {
 	        this.agent_id = source["agent_id"];
 	        this.regenerate_group_id = source["regenerate_group_id"];
 	        this.ignore_context = source["ignore_context"];
+	        this.attachments = this.convertValues(source["attachments"], Attachment);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class WebDAVConfig {
 	    url: string;
