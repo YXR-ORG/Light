@@ -776,18 +776,289 @@ wails build -ldflags "-X main.Version=1.2.0"
 
 ### 14.3 应用图标规范
 
-- 源文件：`build/appicon.png`（1024×1024 PNG，RGBA）
-- **Dock 图标规范**：内容占画布 80%，四周各留 10% 透明边距（macOS HIG 标准）
-- Wails 自动将 `appicon.png` 转为各平台格式
+- Wails 主图标源文件：`build/appicon.png`
+- 格式：PNG、RGBA、正方形、透明背景
+- 标准画布：`1024×1024 px`
+- 图标主体：占画布 `80%`，即主体最大外接框 `819×819 px`
+- 透明边距：四周各 `10%`，即上下左右各约 `102 px`
+- 禁止全出血：主体贴边会导致 macOS Dock、Launchpad、Windows 任务栏里显得过大或被裁切
+- 禁止非透明底：除非产品设计明确需要底板，否则外圈应为透明像素
+
+#### 14.3.1 80% 规则的精确尺寸
+
+以 `1024×1024` 画布为例：
+
+| 项 | 数值 | 说明 |
+|----|------|------|
+| 画布尺寸 | `1024×1024` | 最终提交到 `build/appicon.png` 的尺寸 |
+| 主体占比 | `80%` | 图标主要视觉元素的最大外接框占整张图 80% |
+| 主体最大尺寸 | `819×819` | `1024 * 0.8 = 819.2`，实际取 `819` 或 `820` 均可 |
+| 单边透明边距 | `102 px` | `(1024 - 819) / 2 = 102.5` |
+| 安全区 | 中心 `819×819` | 文字、Logo、强识别元素必须在此区域内 |
+
+如果原始图不是透明 PNG，先抠出主体；如果原始图已经是透明 PNG 但主体太满，用下面脚本自动裁剪主体并缩放到 80% 安全区。
+
+#### 14.3.2 标准源文件生成脚本
+
+推荐保留一份原始大图：`build/appicon.png.bak`，然后生成 Wails 使用的 `build/appicon.png`：
+
+```python
+from PIL import Image
+import numpy as np
+
+src = "build/appicon.png.bak"
+dst = "build/appicon.png"
+
+canvas_size = 1024
+content_ratio = 0.80
+target_size = int(canvas_size * content_ratio)
+padding = (canvas_size - target_size) // 2
+
+img = Image.open(src).convert("RGBA")
+arr = np.array(img)
+alpha = arr[:, :, 3]
+
+rows = np.any(alpha > 10, axis=1)
+cols = np.any(alpha > 10, axis=0)
+
+if not rows.any() or not cols.any():
+    raise RuntimeError("source image has no visible pixels")
+
+rmin, rmax = np.where(rows)[0][[0, -1]]
+cmin, cmax = np.where(cols)[0][[0, -1]]
+content = img.crop((cmin, rmin, cmax + 1, rmax + 1))
+
+content.thumbnail((target_size, target_size), Image.LANCZOS)
+canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+x = (canvas_size - content.width) // 2
+y = (canvas_size - content.height) // 2
+canvas.paste(content, (x, y), content)
+canvas.save(dst)
+
+print(f"saved {dst}: canvas={canvas_size}, content<= {target_size}, padding~= {padding}px")
+```
+
+#### 14.3.3 Wails 需要的图标文件
+
+`build/appicon.png` 是跨平台源文件，但最终打包时各平台使用不同文件：
+
+| 平台 | 文件 | 来源 | 说明 |
+|------|------|------|------|
+| 通用源图 | `build/appicon.png` | 手工提供 | `1024×1024`、RGBA、透明背景、主体 80% |
+| macOS | `build/darwin/iconfile.icns` | Wails 可由 `appicon.png` 生成 | `.app/Contents/Resources/iconfile.icns` |
+| Windows | `build/windows/icon.ico` | Wails 可由 `appicon.png` 生成 | 编译进 `Light.exe` 资源 |
+
+Wails 在缺少平台图标时会尝试根据 `build/appicon.png` 重新生成，但实际项目中建议把 `build/darwin/iconfile.icns` 与 `build/windows/icon.ico` 一起提交，避免 CI 与本机生成结果不一致。
+
+#### 14.3.4 macOS iconset 尺寸清单
+
+macOS `.icns` 由 `.iconset` 目录生成，必须包含多档尺寸。标准清单如下：
+
+| 文件 | 像素尺寸 | 用途 |
+|------|----------|------|
+| `icon_16x16.png` | `16×16` | Finder 小图标 |
+| `icon_16x16@2x.png` | `32×32` | Retina 小图标 |
+| `icon_32x32.png` | `32×32` | Finder/列表 |
+| `icon_32x32@2x.png` | `64×64` | Retina 列表 |
+| `icon_128x128.png` | `128×128` | Dock/预览 |
+| `icon_128x128@2x.png` | `256×256` | Retina Dock/预览 |
+| `icon_256x256.png` | `256×256` | 大图标 |
+| `icon_256x256@2x.png` | `512×512` | Retina 大图标 |
+| `icon_512x512.png` | `512×512` | 超大图标 |
+| `icon_512x512@2x.png` | `1024×1024` | Retina 超大图标 |
+
+生成命令：
+
+```bash
+mkdir -p /tmp/MyApp.iconset
+python3 << 'EOF'
+from PIL import Image
+
+img = Image.open("build/appicon.png").convert("RGBA")
+sizes = [16, 32, 128, 256, 512]
+
+for size in sizes:
+    img.resize((size, size), Image.LANCZOS).save(f"/tmp/MyApp.iconset/icon_{size}x{size}.png")
+    img.resize((size * 2, size * 2), Image.LANCZOS).save(f"/tmp/MyApp.iconset/icon_{size}x{size}@2x.png")
+EOF
+
+iconutil -c icns /tmp/MyApp.iconset -o build/darwin/iconfile.icns
+```
+
+如果要刷新已安装到 `/Applications` 的应用图标：
+
+```bash
+cp build/darwin/iconfile.icns "/Applications/MyApp.app/Contents/Resources/iconfile.icns"
+touch "/Applications/MyApp.app"
+find ~/Library/Caches -name "com.apple.iconservices*" -delete
+killall iconservicesd 2>/dev/null || true
+killall Dock 2>/dev/null || true
+```
+
+#### 14.3.5 Windows ICO 尺寸清单
+
+Windows `.ico` 建议内含多档尺寸，至少包含：
+
+| 尺寸 | 必要性 | 用途 |
+|------|--------|------|
+| `16×16` | 必须 | 标题栏、小列表 |
+| `24×24` | 推荐 | 部分缩放档位 |
+| `32×32` | 必须 | 任务栏、资源管理器 |
+| `48×48` | 必须 | 桌面图标 |
+| `64×64` | 推荐 | 高 DPI |
+| `128×128` | 推荐 | 高 DPI |
+| `256×256` | 必须 | Windows 大图标 |
+
+生成命令：
+
+```bash
+python3 << 'EOF'
+from PIL import Image
+
+img = Image.open("build/appicon.png").convert("RGBA")
+sizes = [(16,16), (24,24), (32,32), (48,48), (64,64), (128,128), (256,256)]
+img.save("build/windows/icon.ico", sizes=sizes)
+EOF
+```
+
+生成后确认文件存在：
+
+```bash
+ls -lh build/appicon.png build/darwin/iconfile.icns build/windows/icon.ico
+```
+
+#### 14.3.6 图标验收清单
+
+- `build/appicon.png` 必须是 `1024×1024`，不是 `512×512` 或长方形
+- 主体最大外接框必须约 `819×819`，不能贴边
+- 四周透明边距约 `102 px`，不是白色或黑色实底
+- macOS Dock 中图标视觉大小应与系统 App 接近，不能明显大一圈
+- Windows 任务栏、桌面、资源管理器大图标都应清晰，不应糊、黑边、白底
+- 替换图标后必须重新执行 `wails build`，只替换源 PNG 不会自动更新已构建产物
 
 ### 14.4 大文件处理（ONNX 模型等）
 
 - 不进 git（`.gitignore` 排除 `*.onnx`）
-- CI 中从 HuggingFace 或 CDN 下载
+- CI 中从镜像源或 CDN 下载，不要依赖 Hugging Face 免费直连
 - macOS：复制到 `app.app/Contents/Resources/`
 - Windows：复制到 exe 同级 `models/` 目录
+- GitHub Actions 必须加 `actions/cache`，避免每个 tag 都重新下载大文件
+- 下载命令必须开启失败检测和重试，避免下载到 HTML 错误页仍然打包成功
+
+推荐目录结构：
+
+```
+build/models/
+└── all-MiniLM-L6-v2/
+    ├── model.onnx
+    ├── tokenizer.json
+    ├── tokenizer_config.json
+    ├── vocab.txt
+    └── config.json
+```
+
+macOS 打包后位置：
+
+```
+MyApp.app/Contents/Resources/models/all-MiniLM-L6-v2/
+```
+
+Windows 打包后位置：
+
+```
+MyApp.exe
+models/all-MiniLM-L6-v2/
+```
+
+不要把 `.onnx` 提交到 git。Release 包里包含模型即可，开发机和 CI 都通过下载或缓存准备模型。
 
 ### 14.5 GitHub Actions CI（tag 触发自动发布）
+
+Release workflow 只在 tag push 时触发。修复 workflow 后，旧 tag 不会自动重跑；推荐新打 patch tag（如 `v1.5.1`），不要强推移动已发布 tag。
+
+#### 14.5.1 模型下载防限流模板
+
+Hugging Face 免费直连在 GitHub Actions 里容易返回 HTTP 429。实践做法：
+
+- 使用 `actions/cache@v4` 缓存 `build/models/<MODEL_NAME>`
+- 缓存 miss 时从 `hf-mirror.com` 或自己的 CDN 下载
+- macOS `curl` 必须加 `--fail --show-error -L --retry 5 --retry-delay 3`
+- Windows `Invoke-WebRequest` 必须有重试、超时和失败抛错
+- `MODEL_CACHE_KEY` 需要带版本号，模型文件变更时手动递增，例如 `hf-all-minilm-l6-v2-v2`
+
+公共环境变量：
+
+```yaml
+env:
+  MODEL_NAME: all-MiniLM-L6-v2
+  HF_BASE: https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main
+  MODEL_CACHE_KEY: hf-all-minilm-l6-v2-v1
+```
+
+macOS 下载步骤：
+
+```yaml
+- name: Cache embedding model
+  id: cache-model
+  uses: actions/cache@v4
+  with:
+    path: build/models/${{ env.MODEL_NAME }}
+    key: ${{ env.MODEL_CACHE_KEY }}
+
+- name: Download embedding model
+  if: steps.cache-model.outputs.cache-hit != 'true'
+  run: |
+    mkdir -p build/models/${{ env.MODEL_NAME }}
+    curl --fail --show-error -L --retry 5 --retry-delay 3 -o build/models/${{ env.MODEL_NAME }}/model.onnx            "${{ env.HF_BASE }}/onnx/model.onnx"
+    curl --fail --show-error -L --retry 5 --retry-delay 3 -o build/models/${{ env.MODEL_NAME }}/tokenizer.json        "${{ env.HF_BASE }}/tokenizer.json"
+    curl --fail --show-error -L --retry 5 --retry-delay 3 -o build/models/${{ env.MODEL_NAME }}/tokenizer_config.json "${{ env.HF_BASE }}/tokenizer_config.json"
+    curl --fail --show-error -L --retry 5 --retry-delay 3 -o build/models/${{ env.MODEL_NAME }}/vocab.txt             "${{ env.HF_BASE }}/vocab.txt"
+    curl --fail --show-error -L --retry 5 --retry-delay 3 -o build/models/${{ env.MODEL_NAME }}/config.json           "${{ env.HF_BASE }}/config.json"
+    ls -lh build/models/${{ env.MODEL_NAME }}/
+```
+
+Windows 下载步骤：
+
+```yaml
+- name: Cache embedding model
+  id: cache-model
+  uses: actions/cache@v4
+  with:
+    path: build/models/${{ env.MODEL_NAME }}
+    key: ${{ env.MODEL_CACHE_KEY }}
+
+- name: Download embedding model
+  if: steps.cache-model.outputs.cache-hit != 'true'
+  run: |
+    New-Item -ItemType Directory -Force -Path "build/models/${{ env.MODEL_NAME }}"
+    $base = "${{ env.HF_BASE }}"
+    $files = @{
+      "model.onnx"            = "$base/onnx/model.onnx"
+      "tokenizer.json"        = "$base/tokenizer.json"
+      "tokenizer_config.json" = "$base/tokenizer_config.json"
+      "vocab.txt"             = "$base/vocab.txt"
+      "config.json"           = "$base/config.json"
+    }
+    foreach ($name in $files.Keys) {
+      $dest = "build/models/${{ env.MODEL_NAME }}/$name"
+      $url  = $files[$name]
+      $ok   = $false
+      for ($i = 0; $i -lt 5 -and -not $ok; $i++) {
+        try {
+          Invoke-WebRequest -Uri $url -OutFile $dest -TimeoutSec 120
+          $ok = $true
+          Write-Host "$name downloaded: $((Get-Item $dest).Length) bytes"
+        } catch {
+          Write-Host "Retry $($i+1) for $name : $_"
+          Start-Sleep -Seconds 3
+        }
+      }
+      if (-not $ok) { throw "Failed to download $name after 5 attempts" }
+    }
+  shell: pwsh
+```
+
+#### 14.5.2 完整发布骨架
 
 ```yaml
 on:
@@ -804,12 +1075,7 @@ jobs:
       - run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
       - run: npm install
         working-directory: frontend
-      - name: Download model
-        run: |
-          mkdir -p build/models/all-MiniLM-L6-v2
-          curl -L -o build/models/all-MiniLM-L6-v2/model.onnx \
-            "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"
-          # tokenizer.json, vocab.txt, config.json 同理
+      # 先 cache，再按 14.5.1 的模板下载模型
       - run: wails build -tags fts5 -platform darwin/universal -ldflags "-X main.Version=${{ github.ref_name }}"
       - name: Bundle model
         run: cp -r build/models/all-MiniLM-L6-v2 "build/bin/MyApp.app/Contents/Resources/models/"
