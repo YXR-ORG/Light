@@ -76,10 +76,19 @@ func (t *ReadFileTool) InvokableRun(_ context.Context, argsJSON string, _ ...too
 	if err != nil {
 		return fmt.Sprintf("读取失败: %v", err), nil
 	}
+	body := string(data)
 	if len(data) > fileReadLimit {
-		return string(data[:fileReadLimit]) + "\n\n[内容已截断，超过 100KB]", nil
+		body = string(data[:fileReadLimit]) + "\n\n[内容已截断，超过 100KB]"
 	}
-	return string(data), nil
+	// 追加产物标记（供前端在“本次涉及的文件”区展示，可点击打开）
+	return EmbedArtifact(body, Artifact{
+		Type:    "file",
+		Action:  "read",
+		Title:   filepath.Base(args.Path),
+		Path:    args.Path,
+		AbsPath: abs,
+		Bytes:   len(data),
+	}), nil
 }
 
 // ---- write_file ----
@@ -116,25 +125,16 @@ func (t *WriteFileTool) InvokableRun(_ context.Context, argsJSON string, _ ...to
 	if err := os.WriteFile(abs, []byte(args.Content), 0644); err != nil {
 		return fmt.Sprintf("写入失败: %v", err), nil
 	}
-	// 返回人类可读的结果给 LLM，同时在注释里附带结构化数据给前端渲染
-	// 格式：人类可读文本\n<!--WRITE_FILE_RESULT:{json}-->
-	preview := args.Content
-	truncated := false
-	if len([]rune(preview)) > 2000 {
-		runes := []rune(preview)
-		preview = string(runes[:2000])
-		truncated = true
-	}
-	meta, _ := json.Marshal(map[string]any{
-		"ok":        true,
-		"path":      args.Path,
-		"abs_path":  abs,
-		"bytes":     len(args.Content),
-		"preview":   preview,
-		"truncated": truncated,
-	})
+	// 返回人类可读结果给 LLM，同时通过产物标记把结构化数据传给前端渲染
 	humanText := fmt.Sprintf("文件已写入: %s（%d 字节）", args.Path, len(args.Content))
-	return fmt.Sprintf("%s\n<!--WRITE_FILE_RESULT:%s-->", humanText, string(meta)), nil
+	return EmbedArtifact(humanText, Artifact{
+		Type:    "file",
+		Action:  "write",
+		Title:   filepath.Base(args.Path),
+		Path:    args.Path,
+		AbsPath: abs,
+		Bytes:   len(args.Content),
+	}), nil
 }
 
 // ---- list_dir ----

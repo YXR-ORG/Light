@@ -354,6 +354,9 @@ async function sendTask(text: string) {
 
   // 发送任务请求（后端 task:step 事件驱动 ChatView 渲染）
   store.setStreaming(true)
+  // 捕获本次是否清除上下文，发送后立即复位（分割线消失、按钮复位，一次性）
+  const ignoreCtx = store.taskCutoffActive
+  store.resetTaskCutoff()
   try {
     await StreamTask({
       conversation_id: store.currentConvId,
@@ -361,7 +364,7 @@ async function sendTask(text: string) {
       provider: providerID,
       model: currentModel.value || 'gpt-4o',
       work_dir: workDir.value,
-      ignore_context: store.taskCutoffActive,
+      ignore_context: ignoreCtx,
     } as any)
   } catch (e: any) {
     const msg = e?.message || e?.Message || String(e)
@@ -466,6 +469,8 @@ async function send() {
     store.setStreaming(false)
   } finally {
     clearTimeout(safetyTimer)
+    // 一次性清除上下文：发送后复位，分割线消失
+    if (store.contextCutoffId !== null) store.contextCutoffId = null
   }
 }
 
@@ -636,12 +641,11 @@ function onKeydown(e: KeyboardEvent) {
         <button class="btn-tool" @click="pickAttachments()" :title="'上传文件或图片'" :class="{ active: attachments.length > 0 }">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
-        <!-- 忽略上下文 -->
+        <!-- 忽略上下文（一次性：点击=本次不带上下文+显示分割线，再点取消；不显示选中高亮） -->
         <button
           class="btn-tool"
-          :class="{ active: chatMode === 'task' ? store.taskCutoffActive : ignoreContext }"
           @click="chatMode === 'task' ? store.toggleTaskContextCutoff() : store.toggleContextCutoff()"
-          :title="(chatMode === 'task' ? store.taskCutoffActive : ignoreContext) ? '取消清除上下文' : '清除上下文'"
+          :title="(chatMode === 'task' ? store.taskCutoffActive : ignoreContext) ? '取消清除上下文' : '清除上下文（本次不带历史）'"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/><line x1="18" y1="3" x2="6" y2="21" stroke-width="1.5"/></svg>
         </button>

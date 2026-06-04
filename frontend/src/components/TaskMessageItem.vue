@@ -2,6 +2,8 @@
 import { ref, computed } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
+import { collectArtifacts, stripArtifacts, type Artifact } from '../utils/artifacts'
+import ArtifactCard from './ArtifactCard.vue'
 
 marked.setOptions({
   highlight(code: string, lang: string) {
@@ -15,7 +17,7 @@ marked.setOptions({
 } as any)
 
 export interface TaskStep {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'bash_confirm' | 'bash_output' | 'content' | 'done' | 'error'
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'bash_confirm' | 'bash_output' | 'content' | 'content_note' | 'done' | 'error'
   content?: string
   tool_name?: string
   tool_args?: string
@@ -32,6 +34,8 @@ const props = defineProps<{
   streaming?: boolean
   isHistory?: boolean
   streamingContent?: string
+  notice?: string
+  artifactsJson?: string  // 历史消息的产物 JSON（[]Artifact），优先于从 steps 收集
 }>()
 
 const userHtml = computed(() => {
@@ -45,17 +49,10 @@ const finalContent = computed(() =>
     : props.steps.filter(s => s.type === 'content').map(s => s.content || '').join('')
 )
 
-// 流式过程中直接显示纯文本，完成后才渲染 markdown，避免不完整语法导致渲染跳变
+// 始终渲染 markdown（与 chat 模式一致），流式中也实时渲染。
+// marked 对不完整语法容错良好，下一帧即修正。
 const finalHtml = computed(() => {
   if (!finalContent.value) return ''
-  if (props.streaming) {
-    // 流式中：纯文本，换行转 <br>
-    return finalContent.value
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/\n/g, '<br>')
-  }
   return marked(finalContent.value) as string
 })
 
@@ -66,7 +63,7 @@ const chainSteps = computed(() => {
   const merged: TaskStep[] = []
   for (const step of raw) {
     const last = merged[merged.length - 1]
-    if (last && last.type === step.type && ['thinking', 'bash_output'].includes(step.type)) {
+    if (last && last.type === step.type && ['thinking', 'bash_output', 'content_note'].includes(step.type)) {
       last.content = (last.content || '') + (step.content || '')
     } else {
       merged.push({ ...step })
@@ -101,53 +98,17 @@ function truncate(s: string, max = 800) {
 }
 
 // 解析 tool_result，检测是否为 write_file 的结构化结果
-interface WriteFileResult {
-  ok: boolean
-  path: string
-  abs_path: string
-  bytes: number
-  preview: string
-  truncated: boolean
-}
-
-function parseWriteFileResult(result?: string): WriteFileResult | null {
-  if (!result) return null
-  // 新格式：人类可读文本\n<!--WRITE_FILE_RESULT:{json}-->
-  const marker = '<!--WRITE_FILE_RESULT:'
-  const idx = result.indexOf(marker)
-  if (idx !== -1) {
-    const jsonStr = result.slice(idx + marker.length, result.lastIndexOf('-->'))
+// 本次任务涉及的所有产物（文件/链接/图片…）。
+// 历史消息：优先用持久化的 artifactsJson；实时流式：从所有 tool_result 自动收集。
+const artifacts = computed<Artifact[]>(() => {
+  if (props.artifactsJson) {
     try {
-      const obj = JSON.parse(jsonStr)
-      if (obj.ok && obj.path) return obj as WriteFileResult
+      const arr = JSON.parse(props.artifactsJson)
+      if (Array.isArray(arr)) return arr as Artifact[]
     } catch {}
   }
-  // 旧格式兼容：纯 JSON
-  try {
-    const obj = JSON.parse(result)
-    if (obj.ok && obj.path && obj.preview !== undefined) return obj as WriteFileResult
-  } catch {}
-  return null
-}
-
-// 根据文件扩展名判断是否为 markdown
-function isMarkdown(path: string) {
-  return /\.(md|markdown)$/i.test(path)
-}
-
-// 文件预览 html
-function filePreviewHtml(r: WriteFileResult): string {
-  if (isMarkdown(r.path)) {
-    return marked(r.preview) as string
-  }
-  // 代码文件：用 highlight.js
-  const ext = r.path.split('.').pop() || ''
-  const lang = hljs.getLanguage(ext) ? ext : ''
-  const highlighted = lang
-    ? hljs.highlight(r.preview, { language: lang }).value
-    : hljs.highlightAuto(r.preview).value
-  return `<pre><code>${highlighted}</code></pre>`
-}
+  return collectArtifacts(props.steps.filter(s => s.type === 'tool_result').map(s => s.tool_result))
+})
 
 function toolIcon(name?: string) {
   if (!name) return '⚙'
@@ -171,8 +132,17 @@ function toolIcon(name?: string) {
   <!-- AI task 消息 -->
   <div v-else class="task-msg task-msg--assistant">
 
-    <!-- 历史模式：直接渲染 markdown -->
-    <div v-if="isHistory" class="task-answer__bubble markdown-body" v-html="finalHtml" />
+    <!-- 历史模式：渲染 markdown + 产物区 -->
+    <template v-if="isHistory">
+      <div class="task-answer__bubble markdown-body" v-html="finalHtml" />
+      <div v-if="artifacts.length > 0" class="task-files">
+        <div class="task-files__title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          本次涉及的文件（{{ artifacts.length }}）
+        </div>
+        <ArtifactCard v-for="(art, i) in artifacts" :key="i" :artifact="art" />
+      </div>
+    </template>
 
     <!-- 流式模式 -->
     <template v-else>
@@ -198,6 +168,12 @@ function toolIcon(name?: string) {
               <span class="chain-step__text">{{ step.content }}</span>
             </div>
 
+            <!-- content_note：含 tool_call 轮次的过程旁白 -->
+            <div v-else-if="step.type === 'content_note'" class="chain-step chain-step--note">
+              <span class="chain-step__icon">📝</span>
+              <span class="chain-step__text">{{ step.content }}</span>
+            </div>
+
             <!-- tool_call -->
             <div v-else-if="step.type === 'tool_call'" class="chain-step chain-step--tool">
               <span class="chain-step__icon">{{ toolIcon(step.tool_name) }}</span>
@@ -205,19 +181,10 @@ function toolIcon(name?: string) {
               <pre v-if="step.tool_args" class="chain-step__code">{{ formatArgs(step.tool_args) }}</pre>
             </div>
 
-            <!-- tool_result write_file -->
-            <div v-else-if="step.type === 'tool_result' && parseWriteFileResult(step.tool_result)" class="chain-step chain-step--file">
-              <span class="chain-step__icon">✏️</span>
-              <span class="chain-step__tool-name">{{ parseWriteFileResult(step.tool_result)!.path }}</span>
-              <span class="chain-step__file-size">{{ parseWriteFileResult(step.tool_result)!.bytes }} B</span>
-              <div class="chain-step__file-preview markdown-body"
-                v-html="filePreviewHtml(parseWriteFileResult(step.tool_result)!)" />
-            </div>
-
-            <!-- tool_result 普通 -->
+            <!-- tool_result（产物统一在底部产物区展示，这里只显示文本，剥离产物标记） -->
             <div v-else-if="step.type === 'tool_result'" class="chain-step chain-step--result">
               <span class="chain-step__icon chain-step__icon--result">↳</span>
-              <pre class="chain-step__result">{{ truncate(step.tool_result || '') }}</pre>
+              <pre class="chain-step__result">{{ truncate(stripArtifacts(step.tool_result)) }}</pre>
             </div>
 
             <!-- bash_output -->
@@ -236,9 +203,19 @@ function toolIcon(name?: string) {
       </div>
 
       <!-- 流式内容 / 最终回答 -->
-      <div v-if="finalContent || streaming" class="task-answer">
-        <div class="task-answer__bubble markdown-body" v-html="finalHtml" />
+      <div v-if="finalContent || streaming || notice" class="task-answer">
+        <div v-if="notice" class="task-notice">{{ notice }}</div>
+        <div v-if="finalContent || streaming" class="task-answer__bubble markdown-body" v-html="finalHtml" />
         <span v-if="streaming" class="task-cursor">▋</span>
+      </div>
+
+      <!-- 本次涉及的产物（文件/链接/图片…）：从工具结果自动收集，常驻显示 -->
+      <div v-if="artifacts.length > 0" class="task-files">
+        <div class="task-files__title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          本次涉及的文件（{{ artifacts.length }}）
+        </div>
+        <ArtifactCard v-for="(art, i) in artifacts" :key="i" :artifact="art" />
       </div>
 
     </template>
@@ -407,8 +384,13 @@ function toolIcon(name?: string) {
   font-size: 12px;
   color: var(--color-text-3);
 }
+.chain-step--note {
+  background: oklch(0.975 0.006 250);
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
 .chain-step--tool { background: oklch(0.975 0.008 220); }
-.chain-step--file { background: oklch(0.975 0.008 160); flex-direction: column; gap: 4px; }
 .chain-step--result { background: oklch(0.975 0.008 160); }
 .chain-step--bash { background: oklch(0.10 0 0); padding: 8px 12px; }
 .chain-step--error { background: oklch(0.975 0.02 20); color: oklch(0.45 0.15 20); }
@@ -423,12 +405,6 @@ function toolIcon(name?: string) {
 .chain-step__tool-name {
   font-weight: 600;
   color: oklch(0.38 0.1 220);
-  flex-shrink: 0;
-}
-
-.chain-step__file-size {
-  font-size: 10.5px;
-  opacity: 0.45;
   flex-shrink: 0;
 }
 
@@ -475,17 +451,34 @@ function toolIcon(name?: string) {
   width: 100%;
 }
 
-.chain-step__file-preview {
+/* ── 本次涉及的产物区 ── */
+.task-files {
+  max-width: 760px;
   width: 100%;
-  max-height: 360px;
-  overflow-y: auto;
-  font-family: inherit;
-  font-size: 13px;
-  padding: 4px 0;
+  margin-top: 10px;
+}
+.task-files__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-2);
+  margin-bottom: 6px;
 }
 
 /* ── 最终回答 ── */
 .task-answer { max-width: 760px; width: 100%; }
+.task-notice {
+  background: oklch(0.96 0.04 75);
+  color: oklch(0.45 0.12 55);
+  border: 1px solid oklch(0.85 0.08 75);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
 .task-answer__bubble {
   background: var(--color-paper-2);
   border-radius: 4px 16px 16px 16px;

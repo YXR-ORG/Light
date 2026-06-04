@@ -5,6 +5,8 @@ import {handler} from '../models';
 
 export function ConfirmBash(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
+export function OpenPath(arg1:string,arg2:boolean):Promise<void>;
+
 export function SelectWorkDir():Promise<string>;
 
 export function SetContext(arg1:context.Context):Promise<void>;

@@ -6,6 +6,10 @@ export function ConfirmBash(arg1, arg2, arg3) {
   return window['go']['handler']['TaskHandler']['ConfirmBash'](arg1, arg2, arg3);
 }
 
+export function OpenPath(arg1, arg2) {
+  return window['go']['handler']['TaskHandler']['OpenPath'](arg1, arg2);
+}
+
 export function SelectWorkDir() {
   return window['go']['handler']['TaskHandler']['SelectWorkDir']();
 }

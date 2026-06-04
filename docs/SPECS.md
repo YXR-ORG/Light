@@ -1,6 +1,28 @@
 # Wails AI Chat — 产品规格说明书
 
-> 版本: v0.2 | 更新: 2026-05-29
+> 版本: v0.3 | 更新: 2026-06-04
+
+---
+
+## 〇、三种对话模式（重要：机制不同）
+
+Light 有三种对话模式，**底层执行机制完全不同**，务必区分：
+
+| 模式 | 中文 | 执行引擎 | 说明 |
+|------|------|----------|------|
+| `chat` | 问答 | 手写 `runToolLoop` | 普通对话，可挂 MCP/skill/web search |
+| `knowledge` | 知识库 | 手写 `runToolLoop`（强制挂 `search_knowledge`） | 知识库问答，与问答共用循环 |
+| `task` | **任务** | **eino 框架 ReAct Agent** | 自主任务执行，机制独立，详见专门文档 |
+
+> ⚠️ **问答 / 知识库** 共用同一套手写 tool 循环（`internal/handler/chat.go:584`），区别仅在知识库模式强制绑定 `search_knowledge` 工具。
+>
+> ⚠️ **任务模式** 是完全不同的引擎——标准 eino ReAct Agent，循环/工具注入/Observation 回灌全由框架负责。**不要与前两者混为一谈。**
+
+📖 **任务模式 ReAct 架构详解（含数据流图、我们的流式改动、与问答/知识库对比）**：
+见 [`docs/superpowers/specs/2026-06-04-task-react-architecture.md`](superpowers/specs/2026-06-04-task-react-architecture.md)
+
+📖 **任务模式功能设计（工具集、bash 安全、前端组件）**：
+见 [`docs/superpowers/specs/2026-06-03-task-mode-design.md`](superpowers/specs/2026-06-03-task-mode-design.md)
 
 ---
 

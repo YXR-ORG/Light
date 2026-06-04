@@ -14,15 +14,22 @@ Light 是一款基于 [Wails](https://wails.io) + [eino](https://github.com/clou
 ## 功能特性
 
 - **多模型支持**：OpenAI、Claude、DeepSeek、Gemini、通义千问、火山方舟、Ollama 本地模型等
+- **三种对话模式**：
+  - **问答**：普通对话，可挂载联网搜索、Skills、MCP 工具
+  - **知识库**：挂载本地知识库进行文档问答
+  - **任务模式（Agent）**：基于 eino ReAct Agent 自主规划、执行多步骤任务（文件读写、执行命令、调用工具），全程推理链可见
 - **流式输出**：打字机效果实时展示 AI 回复，支持思考链（Thinking）展示
 - **联网搜索**：集成 Tavily Search API，AI 可自动调用搜索获取最新信息
 - **本地知识库**：上传文档（TXT/MD/PDF/DOCX/Excel），基于 FTS5 全文检索，AI 挂载知识库问答
 - **Skills 广场**：上传 ZIP 包导入技能（SKILL.md 格式），问答时多选调用
 - **智能体**：内置多种角色（通用助手、代码专家、写作助手等），支持自定义
 - **MCP 协议**：支持 stdio / SSE 两种方式接入 MCP 工具服务
+- **任务产物区**：Agent 任务涉及的文件（生成 / 读取）自动归集为产物卡片，点击即可打开或在文件夹中定位，持久化存储、历史可查
+- **安全执行**：危险 Shell 命令（黑名单可配置）执行前弹窗确认；文件操作限制在工作目录内
 - **上下文控制**：一键清除上下文分割线，同一对话内切换话题
 - **明暗主题**：浅色 / 深色 / 跟随系统，持久化记忆
 - **自动标题**：首条消息自动生成对话标题，大模型 + 规则双重兜底
+- **数据备份**：支持 WebDAV（坚果云 / Nextcloud / Alist 等）一键备份与恢复
 
 ## 下载
 
@@ -64,6 +71,19 @@ description: 技能描述
 ```
 
 打开 **设置 → Skills 广场** 上传 ZIP 即可导入。
+
+### 使用任务模式（Agent）
+
+任务模式让 AI 像 Agent 一样自主规划并执行多步骤任务：
+
+1. 在对话输入框左下角切换为「任务」模式
+2. 选择工作目录（Agent 的文件操作限制在此目录内）
+3. 描述任务目标，AI 会自主调用工具（搜索、文件读写、执行命令等）逐步完成
+4. 推理链全程可见（思考 / 工具调用 / 结果），可随时中断
+5. 涉及的文件会在回复下方以**产物卡片**展示，点击即可打开
+
+> 危险命令（如 `rm -rf`）执行前会弹窗确认，黑名单可在 **设置 → 通用设置** 中配置。
+> 默认不主动写文件，仅当你明确要求「保存 / 导出 / 生成文件」时才落地。
 
 ## 发布新版本
 
@@ -193,6 +213,8 @@ API Key 不会上传到任何服务器。
 > 详细问题复盘见 [docs/KNOWLEDGE_BASE_POSTMORTEM.md](docs/KNOWLEDGE_BASE_POSTMORTEM.md)
 >
 > 完整实现技术文档见 [docs/KNOWLEDGE_BASE_IMPL.md](docs/KNOWLEDGE_BASE_IMPL.md)
+>
+> 任务模式设计：[功能设计](docs/superpowers/specs/2026-06-03-task-mode-design.md) · [ReAct 架构](docs/superpowers/specs/2026-06-04-task-react-architecture.md) · [产物机制 & 自适应执行](docs/superpowers/specs/2026-06-04-task-artifact-mechanism.md)
 >
 > 功能规划与 TODO 见 [docs/TODO.md](docs/TODO.md)
 

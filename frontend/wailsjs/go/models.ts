@@ -371,6 +371,7 @@ export namespace storage {
 	    tool_calls?: string;
 	    tool_result?: string;
 	    attachments?: string;
+	    artifacts?: string;
 	    agent_id: string;
 	    mcp_server_ids: string;
 	    mode: string;
@@ -394,6 +395,7 @@ export namespace storage {
 	        this.tool_calls = source["tool_calls"];
 	        this.tool_result = source["tool_result"];
 	        this.attachments = source["attachments"];
+	        this.artifacts = source["artifacts"];
 	        this.agent_id = source["agent_id"];
 	        this.mcp_server_ids = source["mcp_server_ids"];
 	        this.mode = source["mode"];

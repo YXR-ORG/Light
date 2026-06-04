@@ -18,6 +18,7 @@ interface TaskRound {
   userContent: string
   steps: TaskStep[]
   assistantContent: string
+  notice?: string    // 撞上限/死循环时的提示语
   isCutoff?: boolean  // 该轮次之后有上下文分割线
 }
 const completedRounds = ref<TaskRound[]>([])
@@ -31,6 +32,8 @@ const currentTaskSteps = ref<TaskStep[]>([])
 const currentTaskUserContent = ref('')
 // 流式内容累加
 const streamingContent = ref('')
+// 当前轮的提示语（撞上限/死循环）
+const currentNotice = ref('')
 // 是否正在流式输出 task
 const taskStreaming = ref(false)
 
@@ -40,16 +43,9 @@ const isTaskMode = computed(() => {
   return conv?.mode === 'task'
 })
 
-// task 模式清除上下文：标记最后一轮为 cutoff，下次发送只传 cutoff 之后的历史
-watch(() => store.taskCutoffActive, (active) => {
-  if (!isTaskMode.value) return
-  if (active && completedRounds.value.length > 0) {
-    completedRounds.value.forEach(r => r.isCutoff = false)
-    completedRounds.value[completedRounds.value.length - 1].isCutoff = true
-  } else {
-    completedRounds.value.forEach(r => r.isCutoff = false)
-  }
-})
+// task 模式清除上下文：taskCutoffActive=true 时，在已显示内容末尾画分割线，
+// 下次发送只传 cutoff 之后的历史（后端 ignore_context 全量清空历史）。
+// 分割线由模板根据 store.taskCutoffActive 直接渲染，无需在此标记轮次。
 
 // 加载 task 历史消息（跨会话恢复用）
 async function loadTaskHistory() {
@@ -66,6 +62,7 @@ watch(() => store.currentConvId, async () => {
   completedRounds.value = []
   currentTaskSteps.value = []
   streamingContent.value = ''
+  currentNotice.value = ''
   currentTaskUserContent.value = ''
   taskStreaming.value = false
   if (isTaskMode.value) await loadTaskHistory()
@@ -94,6 +91,7 @@ function onTaskStep(evt: TaskStepEvent) {
   if (evt.type === 'user_msg') {
     currentTaskSteps.value = []
     streamingContent.value = ''
+    currentNotice.value = ''
     currentTaskUserContent.value = evt.user_content || evt.content || ''
     taskStreaming.value = true
     store.setStreaming(true)
@@ -107,6 +105,35 @@ function onTaskStep(evt: TaskStepEvent) {
     return
   }
 
+  // content_note：含 tool_call 轮次的过程旁白 → 归入折叠链，不进正文
+  if (evt.type === 'content_note') {
+    currentTaskSteps.value.push({ type: 'content_note', content: evt.content })
+    scrollTaskToBottom()
+    return
+  }
+
+  // content_rollback：本轮实时推送的 content 其实是“过程旁白”（该轮含 tool_call）。
+  // 把这段内容从正文末尾撤回，改入折叠链作 content_note。
+  if (evt.type === 'content_rollback') {
+    const seg = evt.content || ''
+    if (seg && streamingContent.value.endsWith(seg)) {
+      streamingContent.value = streamingContent.value.slice(0, -seg.length)
+    } else if (seg) {
+      // 兜底：按长度从尾部移除（chunk 拼接与聚合文本理论一致）
+      streamingContent.value = streamingContent.value.slice(0, Math.max(0, streamingContent.value.length - seg.length))
+    }
+    currentTaskSteps.value.push({ type: 'content_note', content: seg })
+    scrollTaskToBottom()
+    return
+  }
+
+  // notice：撞上限/死循环的提示语
+  if (evt.type === 'notice') {
+    currentNotice.value = evt.content || ''
+    scrollTaskToBottom()
+    return
+  }
+
   if (evt.type === 'done') {
     taskStreaming.value = false
     store.setStreaming(false)
@@ -115,10 +142,12 @@ function onTaskStep(evt: TaskStepEvent) {
       userContent: currentTaskUserContent.value,
       steps: [...currentTaskSteps.value],
       assistantContent: streamingContent.value,
+      notice: currentNotice.value,
     })
     // 清空当前流式状态
     currentTaskSteps.value = []
     streamingContent.value = ''
+    currentNotice.value = ''
     currentTaskUserContent.value = ''
     // 更新 DB 历史（用于跨会话恢复）
     loadTaskHistory()
@@ -191,6 +220,7 @@ onUnmounted(() => {
             :role="msg.role as 'user' | 'assistant'"
             :user-content="msg.role === 'user' ? msg.content : undefined"
             :steps="msg.role === 'assistant' ? [{ type: 'content', content: msg.content }] : []"
+            :artifacts-json="(msg as any).artifacts"
             :is-history="true"
           />
         </template>
@@ -207,15 +237,17 @@ onUnmounted(() => {
           role="assistant"
           :steps="round.steps"
           :streaming-content="round.assistantContent"
+          :notice="round.notice"
           :is-history="false"
         />
-        <!-- 上下文分割线 -->
-        <div v-if="round.isCutoff" class="task-ctx-divider">
-          <span class="task-ctx-divider-line" />
-          <span class="task-ctx-divider-label">上下文从此处清除</span>
-          <span class="task-ctx-divider-line" />
-        </div>
       </template>
+
+      <!-- 上下文分割线：清除上下文激活且有历史内容时显示 -->
+      <div v-if="store.taskCutoffActive && (completedRounds.length > 0 || taskHistoryMsgs.length > 0)" class="task-ctx-divider">
+        <span class="task-ctx-divider-line" />
+        <span class="task-ctx-divider-label">上下文从此处清除</span>
+        <span class="task-ctx-divider-line" />
+      </div>
 
       <!-- 当前流式轮次 -->
       <template v-if="(taskStreaming || currentTaskSteps.length > 0 || streamingContent) && currentTaskUserContent">
@@ -228,6 +260,7 @@ onUnmounted(() => {
           role="assistant"
           :steps="currentTaskSteps"
           :streaming-content="streamingContent"
+          :notice="currentNotice"
           :streaming="taskStreaming"
         />
       </template>

@@ -33,6 +33,7 @@ type Message struct {
 	ToolCalls         string    `gorm:"type:text" json:"tool_calls,omitempty"`
 	ToolResult        string    `gorm:"type:text" json:"tool_result,omitempty"`
 	Attachments       string    `gorm:"type:text" json:"attachments,omitempty"`
+	Artifacts         string    `gorm:"type:text" json:"artifacts,omitempty"` // JSON []Artifact，task 模式产物（文件等）
 	AgentID           string    `gorm:"size:36;default:''" json:"agent_id"`
 	MCPServerIDs      string    `gorm:"type:text;default:''" json:"mcp_server_ids"`
 	Mode              string    `gorm:"size:16;default:'chat'" json:"mode"`

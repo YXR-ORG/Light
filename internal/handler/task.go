@@ -2,9 +2,13 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -191,18 +195,66 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	// 消费 step channel，转发 task:step events，收集最终回答
 	var finalContent string
 	hadDone := false
+	// 采集本轮产物（文件等），按去重键去重，done 时序列化存库
+	artifactMap := map[string]eino.Artifact{}
+	artifactOrder := []string{}
+	collectArtifact := func(toolResult string) {
+		for _, a := range eino.ParseArtifacts(toolResult) {
+			key := a.AbsPath
+			if key == "" {
+				key = a.URL
+			}
+			if key == "" {
+				key = a.Title
+			}
+			existing, ok := artifactMap[key]
+			// write 优先覆盖 read
+			if !ok {
+				artifactMap[key] = a
+				artifactOrder = append(artifactOrder, key)
+			} else if a.Action == "write" && existing.Action != "write" {
+				artifactMap[key] = a
+			}
+		}
+	}
+	artifactsJSON := func() string {
+		if len(artifactOrder) == 0 {
+			return ""
+		}
+		arr := make([]eino.Artifact, 0, len(artifactOrder))
+		for _, k := range artifactOrder {
+			arr = append(arr, artifactMap[k])
+		}
+		b, err := json.Marshal(arr)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
 	for step := range stepCh {
 		step.ConvID = req.ConversationID
 		slog.Info("StreamTask: step", "type", step.Type, "content_len", len(step.Content))
 		if step.Type == "content" {
 			finalContent += step.Content
 		}
+		if step.Type == "tool_result" {
+			collectArtifact(step.ToolResult)
+		}
+		// content_rollback：本轮 content 实为旁白，从 finalContent 末尾撤回，避免存入 DB 正文
+		if step.Type == "content_rollback" {
+			seg := step.Content
+			if seg != "" && strings.HasSuffix(finalContent, seg) {
+				finalContent = finalContent[:len(finalContent)-len(seg)]
+			} else if seg != "" && len(finalContent) >= len(seg) {
+				finalContent = finalContent[:len(finalContent)-len(seg)]
+			}
+		}
 		if step.Type == "done" {
 			hadDone = true
 			// 先保存 AI 回答到 DB，再发 done 事件，确保前端 loadTaskHistory 能读到数据
 			slog.Info("StreamTask: done received", "finalContent_len", len(finalContent), "convID", req.ConversationID)
 			if finalContent != "" {
-				msgID, err := storage.SaveTaskMessage(req.ConversationID, "assistant", finalContent)
+				msgID, err := storage.SaveTaskMessageWithArtifacts(req.ConversationID, "assistant", finalContent, artifactsJSON())
 				if err != nil {
 					slog.Warn("StreamTask: save assistant message failed", "error", err)
 				} else {
@@ -254,7 +306,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	if !hadDone {
 		slog.Info("StreamTask: agent stopped without done, emitting fallback done", "finalContent_len", len(finalContent), "convID", req.ConversationID)
 		if finalContent != "" {
-			msgID, err := storage.SaveTaskMessage(req.ConversationID, "assistant", finalContent)
+			msgID, err := storage.SaveTaskMessageWithArtifacts(req.ConversationID, "assistant", finalContent, artifactsJSON())
 			if err != nil {
 				slog.Warn("StreamTask: save assistant message failed (fallback)", "error", err)
 			} else {
@@ -327,6 +379,43 @@ func (h *TaskHandler) SelectWorkDir() (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+// OpenPath 用系统默认程序打开文件/目录。reveal=true 时在文件管理器中定位（高亮）该文件。
+func (h *TaskHandler) OpenPath(absPath string, reveal bool) error {
+	if strings.TrimSpace(absPath) == "" {
+		return fmt.Errorf("路径为空")
+	}
+	if _, err := os.Stat(absPath); err != nil {
+		return fmt.Errorf("文件不存在: %w", err)
+	}
+
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "darwin":
+		if reveal {
+			cmd = exec.Command("open", "-R", absPath)
+		} else {
+			cmd = exec.Command("open", absPath)
+		}
+	case "windows":
+		if reveal {
+			cmd = exec.Command("explorer", "/select,", absPath)
+		} else {
+			cmd = exec.Command("explorer", absPath)
+		}
+	default: // linux
+		if reveal {
+			cmd = exec.Command("xdg-open", filepath.Dir(absPath))
+		} else {
+			cmd = exec.Command("xdg-open", absPath)
+		}
+	}
+	if err := cmd.Start(); err != nil {
+		slog.Warn("OpenPath failed", "path", absPath, "reveal", reveal, "error", err)
+		return fmt.Errorf("打开失败: %w", err)
+	}
+	return nil
 }
 
 // historyToEinoMsgs 将 storage.Message 列表转换为 eino schema.Message 列表。

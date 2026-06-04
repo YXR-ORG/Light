@@ -10,6 +10,7 @@ import {
 import { ListAgents, SaveAgent, DeleteAgent } from '../../wailsjs/go/handler/AgentHandler'
 import { ListSkills, SaveSkill, ToggleSkill, DeleteSkill, ImportSkillZip } from '../../wailsjs/go/handler/SkillHandler'
 import { Get as GetSetting, Set as SetSetting } from '../../wailsjs/go/handler/SettingsHandler'
+import { SelectWorkDir } from '../../wailsjs/go/handler/TaskHandler'
 import { SaveConfig, GetConfig, Backup, ListBackups, Restore, DeleteBackup } from '../../wailsjs/go/handler/BackupHandler'
 import { BrowserOpenURL, EventsEmit } from '../../wailsjs/runtime/runtime'
 import AboutPanel from './AboutPanel.vue'
@@ -384,6 +385,11 @@ async function saveTaskSettings() {
   setTimeout(() => { taskSettingsSaved.value = false }, 2000)
 }
 
+async function pickDefaultWorkDir() {
+  const dir = await SelectWorkDir().catch(() => '')
+  if (dir) taskDefaultWorkDir.value = dir
+}
+
 async function saveWebDAVConfig() {
   await SaveConfig(webdavURL.value, webdavUsername.value, webdavPassword.value, webdavPath.value)
   webdavConfigSaved.value = true
@@ -655,45 +661,51 @@ function formatSize(bytes: number): string {
                   </div>
                 </div>
               </div>
-            </div>
 
             <!-- 任务模式安全设置 -->
             <div class="setting-section">
               <div class="setting-section-title">任务模式（Agent）</div>
               <div class="setting-section-desc">Agent 自主执行任务时的安全策略与默认配置。</div>
 
-              <div class="form-row" style="margin-top:var(--space-3)">
-                <label class="form-label">默认工作目录</label>
-                <input
-                  v-model="taskDefaultWorkDir"
-                  class="form-input"
-                  placeholder="留空则每次对话单独设置，例如 ~/Projects"
-                  style="font-family:var(--font-mono);font-size:12px"
-                />
-              </div>
-
-              <div class="form-row" style="margin-top:var(--space-3)">
-                <label class="form-label">Bash 命令黑名单（每行一条，支持 glob）</label>
-                <div class="setting-section-desc" style="margin-bottom:var(--space-2)">
-                  匹配以下模式的命令在执行前将弹框请求用户确认。
+              <div class="form-fields" style="margin-top:var(--space-3)">
+                <div class="field">
+                  <label>默认工作目录 <span class="optional">留空则每次对话单独设置</span></label>
+                  <div style="display:flex;gap:var(--space-2)">
+                    <input
+                      v-model="taskDefaultWorkDir"
+                      placeholder="例如 ~/Projects"
+                      style="flex:1"
+                    />
+                    <button class="btn btn-secondary" @click="pickDefaultWorkDir" style="white-space:nowrap">
+                      选择目录
+                    </button>
+                  </div>
                 </div>
-                <textarea
-                  v-model="taskBashBlacklist"
-                  class="form-input"
-                  rows="8"
-                  style="font-family:var(--font-mono);font-size:12px;resize:vertical"
-                  placeholder="每行一条黑名单规则，支持 shell glob，如 rm -rf *"
-                />
-              </div>
 
-              <div style="display:flex;gap:var(--space-2);margin-top:var(--space-3)">
-                <button class="btn btn-secondary" @click="saveTaskSettings">
-                  {{ taskSettingsSaved ? '已保存 ✓' : '保存设置' }}
-                </button>
-                <button class="btn btn-secondary" @click="taskBashBlacklist = defaultBashBlacklist">
-                  恢复默认
-                </button>
+                <div class="field">
+                  <label>Bash 命令黑名单</label>
+                  <div class="field-hint" style="margin-bottom:var(--space-2)">
+                    每行一条规则，支持 glob 通配符（如 <code>rm -rf *</code>）。匹配的命令在执行前会弹框请求确认。
+                  </div>
+                  <textarea
+                    v-model="taskBashBlacklist"
+                    class="blacklist-input"
+                    rows="8"
+                    spellcheck="false"
+                    placeholder="rm -rf *&#10;sudo rm&#10;dd if="
+                  />
+                </div>
+
+                <div class="task-settings-actions">
+                  <button class="btn btn-primary" @click="saveTaskSettings">
+                    {{ taskSettingsSaved ? '已保存 ✓' : '保存设置' }}
+                  </button>
+                  <button class="btn btn-secondary" @click="taskBashBlacklist = defaultBashBlacklist">
+                    恢复默认
+                  </button>
+                </div>
               </div>
+            </div>
             </div>
 
             <!-- 模型供应商 -->
@@ -1113,6 +1125,27 @@ function formatSize(bytes: number): string {
 .engine-tab.active { border-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-accent); font-weight: 600; }
 
 .field-hint { font-size: var(--text-xs); color: var(--color-text-3); margin-top: var(--space-1); }
+.field-hint code { font-family: var(--font-mono); font-size: 0.92em; background: var(--color-paper-3); padding: 1px 5px; border-radius: var(--radius-sm); color: var(--color-text-2); }
+
+/* 任务模式 - Bash 黑名单输入框 */
+.blacklist-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--color-text);
+  background: var(--color-paper);
+  outline: none;
+  box-sizing: border-box;
+  resize: vertical;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+.blacklist-input:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-soft); }
+.blacklist-input::placeholder { color: var(--color-text-3); }
+.task-settings-actions { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
 
 .webdav-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .backup-msg { font-size: var(--text-xs); color: var(--color-success); }

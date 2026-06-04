@@ -121,12 +121,18 @@ func SaveMessage(convID, role, content, thinking, toolCalls, toolResult, agentID
 
 // SaveTaskMessage 保存 task 模式消息，自动标记 mode=task
 func SaveTaskMessage(convID, role, content string) (*Message, error) {
+	return SaveTaskMessageWithArtifacts(convID, role, content, "")
+}
+
+// SaveTaskMessageWithArtifacts 保存 task 消息，并附带产物 JSON（[]Artifact）。
+func SaveTaskMessageWithArtifacts(convID, role, content, artifacts string) (*Message, error) {
 	id := NewID()
 	m := &Message{
 		ID:                id,
 		ConversationID:    convID,
 		Role:              role,
 		Content:           content,
+		Artifacts:         artifacts,
 		Mode:              "task",
 		GenerationGroupID: id,
 		GenIndex:          0,
