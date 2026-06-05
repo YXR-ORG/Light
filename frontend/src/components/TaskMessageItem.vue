@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
-import { collectArtifacts, stripArtifacts, type Artifact } from '../utils/artifacts'
+import { collectArtifacts, splitTaskArtifacts, stripArtifacts, type Artifact } from '../utils/artifacts'
 import ArtifactCard from './ArtifactCard.vue'
 
 marked.setOptions({
@@ -111,9 +111,11 @@ const artifacts = computed<Artifact[]>(() => {
   return collectArtifacts(props.steps.filter(s => s.type === 'tool_result').map(s => s.tool_result))
 })
 
-// plan 产物放回复区顶部（执行导航），file 等产物放回复下方
-const planArtifacts = computed(() => artifacts.value.filter(a => a.type === 'plan'))
-const fileArtifacts = computed(() => artifacts.value.filter(a => a.type !== 'plan'))
+const taskArtifacts = computed(() => splitTaskArtifacts(artifacts.value))
+
+// plan 产物放回复区顶部（执行导航）；“本次涉及的文件”只展示真正的 file 产物。
+const planArtifacts = computed(() => taskArtifacts.value.plans)
+const fileArtifacts = computed(() => taskArtifacts.value.files)
 
 interface AttachmentMeta { name: string; mime_type: string }
 const attachmentMetas = computed<AttachmentMeta[]>(() => {

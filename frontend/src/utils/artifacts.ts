@@ -22,6 +22,12 @@ export interface Artifact {
   steps?: PlanStep[]    // plan 步骤
 }
 
+export interface TaskArtifacts {
+  plans: Artifact[]
+  files: Artifact[]
+  others: Artifact[]
+}
+
 const ARTIFACT_RE = /<!--ARTIFACT:([A-Za-z0-9+/=]*)-->/g
 
 // base64 → UTF-8 字符串（兼容中文等多字节内容）
@@ -77,4 +83,23 @@ export function collectArtifacts(results: (string | undefined)[]): Artifact[] {
     }
   }
   return Array.from(map.values())
+}
+
+function artifactType(a: Artifact): string {
+  return String(a.type || '').trim().toLowerCase()
+}
+
+export function splitTaskArtifacts(artifacts: Artifact[]): TaskArtifacts {
+  const plans: Artifact[] = []
+  const files: Artifact[] = []
+  const others: Artifact[] = []
+
+  for (const a of artifacts) {
+    const t = artifactType(a)
+    if (t === 'plan') plans.push(a)
+    else if (t === 'file') files.push(a)
+    else others.push(a)
+  }
+
+  return { plans, files, others }
 }

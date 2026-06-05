@@ -1,8 +1,8 @@
 # Task 模式 — 通用产物机制 & 自适应执行
 
-> 版本：v1.0
+> 版本：v1.1
 > 日期：2026-06-04
-> 状态：已实现（v1.4.0）
+> 状态：已实现（v1.4.0），v1.5.2 补充 plan/file 历史分桶约束
 > 关联：`2026-06-03-task-mode-design.md`（功能设计）、`2026-06-04-task-react-architecture.md`（ReAct 架构）
 
 本文档记录 task 模式在 v1.4.0 引入的两大机制：**通用产物（Artifact）机制** 与 **自适应执行（步数 + 总结兜底）**，以及配套的正文/旁白分离、清除上下文交互。
@@ -78,11 +78,21 @@ return EmbedArtifact("文件已写入: report.md（1234 字节）", Artifact{
 
 | 文件 | 职责 |
 |------|------|
-| `utils/artifacts.ts` | `parseArtifacts` / `stripArtifacts` / `collectArtifacts`，UTF-8 安全的 base64 解码 |
+| `utils/artifacts.ts` | `parseArtifacts` / `stripArtifacts` / `collectArtifacts` / `splitTaskArtifacts`，UTF-8 安全的 base64 解码与 task artifact 分桶 |
 | `components/ArtifactCard.vue` | 按 `type` 渲染卡片：file 点击打开、url/image 浏览器打开，带类型标签和「定位」按钮 |
 | `components/TaskMessageItem.vue` | 调 `collectArtifacts(所有 tool_result)` → 渲染产物区 |
 
 「自动显示」的关键：`collectArtifacts` 扫描所有 `tool_result`，**不关心是哪个工具产生的**，只要有 ARTIFACT 标记就收集。
+
+渲染前必须调用 `splitTaskArtifacts` 做显式分桶：
+
+| Artifact type | UI 区域 | 约束 |
+|---------------|---------|------|
+| `plan` | 回复顶部「执行计划」卡片 | 历史和实时任务渲染一致 |
+| `file` | 「本次涉及的文件」区域 | 文件区只允许 `type === 'file'` |
+| 其他类型 | 预留「相关产物」区域 | 不得放进文件区 |
+
+禁止使用 `type !== 'plan'` 作为文件区判断条件。这个负向判断会把未来新增的 `url` / `image` / `chart`，以及任何异常 type 的 artifact 误归入「本次涉及的文件」。
 
 ### 1.6 持久化（历史会话也能看）
 
@@ -92,6 +102,7 @@ return EmbedArtifact("文件已写入: report.md（1234 字节）", Artifact{
 - `task.go` 消费 step 流时累积所有 `tool_result` 的产物，按 `abs_path/url` 去重（write 优先 read），done 时序列化存入消息
 - 前端 `TaskMessageItem` 的 `artifacts` 计算属性：历史模式优先用持久化的 `artifactsJson`，实时流式则从 steps 收集
 - 历史模式模板也渲染产物区
+- plan 按 `type:"plan"` 持久化；历史恢复时仍显示为执行计划卡片，不得计入「本次涉及的文件」数量
 
 ### 1.7 边界正确性
 

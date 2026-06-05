@@ -1,6 +1,6 @@
 # Wails AI Chat — 产品规格说明书
 
-> 版本: v0.3 | 更新: 2026-06-04
+> 版本: v0.4 | 更新: 2026-06-05
 
 ---
 
@@ -170,40 +170,188 @@ category: 开发
 
 ---
 
-## 五、数据库 Schema（新增）
+## 五、数据库实体关系（ER）
 
-```sql
--- MCP 服务器配置
-CREATE TABLE mcp_servers (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    type        TEXT NOT NULL,  -- "sse" | "stdio"
-    url         TEXT,           -- SSE 模式
-    command     TEXT,           -- Stdio 模式
-    args        TEXT,           -- JSON array
-    env         TEXT,           -- JSON object
-    enabled     BOOLEAN DEFAULT true,
-    created_at  DATETIME,
-    updated_at  DATETIME
-);
+Light 使用两层 SQLite 存储：主库 `~/.wails-chat/chat.db` 保存对话、配置、知识库元数据；每个知识库独立使用 `~/.wails-chat/knowledgebases/{id}/kb.db` 保存文档、分块、FTS5 索引和向量。
 
--- Skills 技能
-CREATE TABLE skills (
-    id           TEXT PRIMARY KEY,
-    name         TEXT NOT NULL,
-    description  TEXT,
-    icon         TEXT,
-    category     TEXT,
-    system_prompt TEXT NOT NULL,
-    is_builtin   BOOLEAN DEFAULT false,
-    created_at   DATETIME,
-    updated_at   DATETIME
-);
+### 5.1 主库 `chat.db`
 
--- conversations 表新增字段（已有 system_prompt）
--- 新增 skill_id 外键
-ALTER TABLE conversations ADD COLUMN skill_id TEXT;
+```mermaid
+erDiagram
+    LLMProvider ||--o{ LLMModel : has
+    Conversation ||--o{ Message : contains
+    Agent ||--o{ Conversation : selected_by
+    KnowledgeBase ||--o{ Conversation : used_by
+
+    Conversation {
+        string id PK
+        string title
+        string provider "LLMProvider.id 或旧版 provider type"
+        string model
+        string system_prompt
+        string agent_id "Agent.id，可空"
+        string mcp_server_ids "JSON []MCPServer.id"
+        bool starred
+        string mode "chat|knowledge|task"
+        string knowledge_base_id "KnowledgeBase.id，knowledge 模式"
+        string work_dir "task 模式工作目录"
+        time created_at
+        time updated_at
+    }
+
+    Message {
+        string id PK
+        string conversation_id FK
+        string role "user|assistant|system|tool"
+        string content
+        string thinking
+        string tool_calls
+        string tool_result
+        string attachments "JSON 附件元数据"
+        string artifacts "JSON []Artifact，task 产物"
+        string agent_id
+        string mcp_server_ids "JSON []MCPServer.id"
+        string mode
+        string knowledge_base_id
+        string generation_group_id
+        int gen_index
+        time created_at
+    }
+
+    LLMProvider {
+        string id PK
+        string name
+        string type "openai|google|claude|ollama|..."
+        string api_key
+        string base_url
+        bool enabled
+    }
+
+    LLMModel {
+        string id PK
+        string provider_id FK
+        string name
+    }
+
+    MCPServer {
+        string id PK
+        string name
+        string type "stdio|sse"
+        string url
+        string command
+        string args
+        string env
+        bool enabled
+    }
+
+    Agent {
+        string id PK
+        string name
+        string icon
+        string description
+        string system_prompt
+        int sort_order
+        bool builtin
+    }
+
+    Skill {
+        string id PK
+        string name
+        string description
+        string content "SKILL.md body"
+        bool enabled
+        int sort_order
+    }
+
+    KnowledgeBase {
+        string id PK
+        string name
+        string description
+        int doc_count
+        time created_at
+        time updated_at
+    }
+
+    Setting {
+        string key PK
+        string value
+    }
 ```
+
+主库关系说明：
+
+- `Conversation.provider` 当前保存 provider 标识；旧数据可能保存 provider type，加载时做兼容迁移。
+- `Conversation.mcp_server_ids` 与 `Message.mcp_server_ids` 是 JSON 数组，不是独立关联表。
+- `Message.attachments` 保存用户上传附件元数据，不保存大文件内容。
+- `Message.artifacts` 保存 task 模式结构化产物数组，包含 `type:"plan"` 与 `type:"file"` 等；plan 是执行计划产物，不是文件。
+- `Skill` 是全局技能广场数据；对话引用技能时走 prompt 注入逻辑，目前没有单独的 conversation-skill 关联表。
+
+### 5.2 每个知识库的 `kb.db`
+
+```mermaid
+erDiagram
+    documents ||--o{ chunks : splits_into
+    chunks ||--o| vectors : embedded_as
+    documents ||--o| summaries : summarized_as
+
+    documents {
+        string id PK
+        string name
+        string mime_type
+        int size
+        int chunk_count
+        string status "pending|processing|ready|error"
+        string error
+        datetime created_at
+    }
+
+    chunks {
+        string id PK
+        string doc_id FK
+        string content
+        int chunk_index
+        datetime created_at
+    }
+
+    vectors {
+        string id PK
+        string chunk_id FK
+        blob embedding
+    }
+
+    summaries {
+        string doc_id PK
+        string doc_name
+        string summary
+        string key_entities "JSON []string"
+        datetime created_at
+    }
+
+    chunks_fts {
+        string chunk_id
+        string doc_name
+        int chunk_index
+        string content "FTS5 trigram index"
+    }
+```
+
+知识库关系说明：
+
+- `KnowledgeBase` 只在主库保存元数据；实际文档索引数据在独立 `kb.db` 中。
+- `chunks_fts` 是 FTS5 虚拟表，不是普通实体表；由 `chunks` 同步写入或重建。
+- 删除文档时必须删除 `chunks`、`vectors`、`summaries` 和 FTS5 记录，保持局部一致性。
+
+### 5.3 Task Artifact 分桶规则
+
+task 模式历史消息恢复时，`Message.artifacts` 必须按 `type` 显式分桶：
+
+| Artifact type | UI 区域 | 说明 |
+|---------------|---------|------|
+| `plan` | 回复顶部「执行计划」卡片 | 独立计划产物，历史和实时渲染一致 |
+| `file` | 「本次涉及的文件」区域 | 仅文件读写产物进入文件区 |
+| `url` / `image` / 其他 | 预留「相关产物」区域 | 不得混入文件区 |
+
+关键约束：`fileArtifacts` 不能使用 `type !== 'plan'` 这种负向分类；必须使用 `type === 'file'`，否则 plan 或未来新类型会被错误显示为文件。
 
 ---
 
