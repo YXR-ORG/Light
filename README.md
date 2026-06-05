@@ -217,13 +217,7 @@ API Key 不会上传到任何服务器。
 
 ---
 
-> 详细问题复盘见 [docs/KNOWLEDGE_BASE_POSTMORTEM.md](docs/KNOWLEDGE_BASE_POSTMORTEM.md)
->
-> 完整实现技术文档见 [docs/KNOWLEDGE_BASE_IMPL.md](docs/KNOWLEDGE_BASE_IMPL.md)
->
-> 任务模式设计：[功能设计](docs/superpowers/specs/2026-06-03-task-mode-design.md) · [ReAct 架构](docs/superpowers/specs/2026-06-04-task-react-architecture.md) · [产物机制 & 自适应执行](docs/superpowers/specs/2026-06-04-task-artifact-mechanism.md)
->
-> 功能规划与 TODO 见 [docs/TODO.md](docs/TODO.md)
+> 完整技术文档、架构说明、知识库与 task 模式设计见 [docs/README.md](docs/README.md)
 
 ## Changelog
 
