@@ -7,11 +7,14 @@ import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 import type { storage } from '../../wailsjs/go/models'
+import { isNearBottom, shouldAutoScroll } from '../utils/scroll'
 
 const store = useChatStore()
 
 // ─── task 模式状态 ────────────────────────────────────────────────
 const taskListRef = ref<HTMLElement | null>(null)
+let taskUserScrolled = false
+let taskScrollTimer: ReturnType<typeof setTimeout> | null = null
 
 // 已完成的轮次（保留推理链，不清空）
 interface TaskRound {
@@ -68,7 +71,9 @@ watch(() => store.currentConvId, async () => {
   currentTaskUserContent.value = ''
   currentTaskAttachmentsMeta.value = ''
   taskStreaming.value = false
+  taskUserScrolled = false
   if (isTaskMode.value) await loadTaskHistory()
+  scrollTaskToBottom(true)
 }, { immediate: true })
 
 // 监听模式切换
@@ -98,9 +103,10 @@ function onTaskStep(evt: TaskStepEvent) {
     currentNotice.value = ''
     currentTaskUserContent.value = evt.user_content || evt.content || ''
     currentTaskAttachmentsMeta.value = evt.attachments_meta || ''
+    taskUserScrolled = false
     taskStreaming.value = true
     store.setStreaming(true)
-    scrollTaskToBottom()
+    scrollTaskToBottom(true)
     return
   }
 
@@ -188,7 +194,14 @@ function onTaskStep(evt: TaskStepEvent) {
   scrollTaskToBottom()
 }
 
-function scrollTaskToBottom() {
+function isTaskAtBottom(): boolean {
+  const el = taskListRef.value
+  if (!el) return true
+  return isNearBottom(el.scrollHeight, el.scrollTop, el.clientHeight)
+}
+
+function scrollTaskToBottom(force = false) {
+  if (!shouldAutoScroll(force, taskUserScrolled)) return
   nextTick(() => {
     if (taskListRef.value) {
       taskListRef.value.scrollTop = taskListRef.value.scrollHeight
@@ -196,11 +209,20 @@ function scrollTaskToBottom() {
   })
 }
 
+function onTaskScroll() {
+  if (!taskStreaming.value) return
+  if (isTaskAtBottom()) { taskUserScrolled = false; return }
+  taskUserScrolled = true
+  if (taskScrollTimer) clearTimeout(taskScrollTimer)
+  taskScrollTimer = setTimeout(() => { taskScrollTimer = null }, 100)
+}
+
 onMounted(() => {
   EventsOn('task:step', onTaskStep)
 })
 onUnmounted(() => {
   EventsOff('task:step')
+  if (taskScrollTimer) clearTimeout(taskScrollTimer)
 })
 </script>
 
@@ -221,7 +243,7 @@ onUnmounted(() => {
     </div>
 
     <!-- task 模式消息区 -->
-    <div v-if="isTaskMode" ref="taskListRef" class="task-list">
+    <div v-if="isTaskMode" ref="taskListRef" class="task-list" @scroll.passive="onTaskScroll">
 
       <!-- 跨会话恢复：completedRounds 为空时显示 DB 历史（无推理链） -->
       <template v-if="completedRounds.length === 0">

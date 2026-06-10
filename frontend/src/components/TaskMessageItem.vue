@@ -57,6 +57,8 @@ const finalHtml = computed(() => {
   return marked(finalContent.value) as string
 })
 
+const showTaskLoading = computed(() => props.streaming && !finalContent.value && !props.notice)
+
 // 推理链：非 content/done，合并连续同类 delta
 const chainSteps = computed(() => {
   const raw = props.steps.filter(s => s.type !== 'content' && s.type !== 'done')
@@ -234,8 +236,16 @@ function toolIcon(name?: string) {
       <!-- 流式内容 / 最终回答 -->
       <div v-if="finalContent || streaming || notice" class="task-answer">
         <div v-if="notice" class="task-notice">{{ notice }}</div>
-        <div v-if="finalContent || streaming" class="task-answer__bubble markdown-body" v-html="finalHtml" />
-        <span v-if="streaming" class="task-cursor">▋</span>
+        <div v-if="showTaskLoading" class="task-loading">
+          <span class="task-loading__dot" />
+          <span class="task-loading__dot" />
+          <span class="task-loading__dot" />
+          <span class="task-loading__text">正在处理任务…</span>
+        </div>
+        <template v-else>
+          <div v-if="finalContent" class="task-answer__bubble markdown-body" v-html="finalHtml" />
+          <span v-if="streaming" class="task-cursor">▋</span>
+        </template>
       </div>
 
       <!-- 本次涉及的产物（文件/链接/图片…）：从工具结果自动收集，常驻显示 -->
@@ -540,6 +550,29 @@ function toolIcon(name?: string) {
   word-break: break-word;
 }
 
+.task-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: var(--color-paper-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-3);
+  font-size: 12.5px;
+}
+.task-loading__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.35;
+  animation: task-dot 1.2s ease-in-out infinite;
+}
+.task-loading__dot:nth-child(2) { animation-delay: 0.15s; }
+.task-loading__dot:nth-child(3) { animation-delay: 0.3s; }
+.task-loading__text { margin-left: 2px; }
+
 /* 光标 */
 .task-cursor {
   display: inline-block;
@@ -548,4 +581,8 @@ function toolIcon(name?: string) {
   font-family: monospace;
 }
 @keyframes blink { 50% { opacity: 0; } }
+@keyframes task-dot {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 0.9; transform: translateY(-2px); }
+}
 </style>
