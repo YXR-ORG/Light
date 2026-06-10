@@ -8,6 +8,7 @@ import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 import type { storage } from '../../wailsjs/go/models'
 import { isNearBottom, shouldAutoScroll } from '../utils/scroll'
+import { shouldShowTaskHistory } from '../utils/taskHistory'
 
 const store = useChatStore()
 
@@ -47,6 +48,8 @@ const isTaskMode = computed(() => {
   const conv = store.conversations.find(c => c.id === store.currentConvId) as any
   return conv?.mode === 'task'
 })
+
+const showTaskHistory = computed(() => shouldShowTaskHistory(taskHistoryMsgs.value.length, completedRounds.value.length))
 
 // task 模式清除上下文：taskCutoffActive=true 时，在已显示内容末尾画分割线，
 // 下次发送只传 cutoff 之后的历史（后端 ignore_context 全量清空历史）。
@@ -165,8 +168,6 @@ function onTaskStep(evt: TaskStepEvent) {
     streamingContent.value = ''
     currentNotice.value = ''
     currentTaskUserContent.value = ''
-    // 更新 DB 历史（用于跨会话恢复）
-    loadTaskHistory()
     scrollTaskToBottom()
     return
   }
@@ -245,8 +246,8 @@ onUnmounted(() => {
     <!-- task 模式消息区 -->
     <div v-if="isTaskMode" ref="taskListRef" class="task-list" @scroll.passive="onTaskScroll">
 
-      <!-- 跨会话恢复：completedRounds 为空时显示 DB 历史（无推理链） -->
-      <template v-if="completedRounds.length === 0">
+      <!-- 跨会话恢复：DB 历史始终显示；当前会话新完成轮次追加在其后，避免结束后历史区消失 -->
+      <template v-if="showTaskHistory">
         <template v-for="msg in taskHistoryMsgs" :key="msg.id">
           <TaskMessageItem
             :role="msg.role as 'user' | 'assistant'"

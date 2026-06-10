@@ -34,6 +34,12 @@ type TaskStep struct {
 	AttachmentsMeta string `json:"attachments_meta"` // user_msg：附件 meta JSON
 }
 
+const taskContentRollbackMaxLen = 1200
+
+func shouldRollbackTaskContent(content string, hasToolCall bool) bool {
+	return hasToolCall && content != "" && len(content) <= taskContentRollbackMaxLen
+}
+
 // taskSystemPrompt 构建 task 模式的 system prompt。
 // planEnabled 为 true 时注入 plan 指令（复杂任务先列计划）。
 func taskSystemPrompt(workDir string, planEnabled bool) string {
@@ -380,14 +386,14 @@ func RunTaskAgent(
 					Content:   text,
 					ToolCalls: toolCalls,
 				})
-				if !hasToolCall && text != "" {
+				if text != "" && !shouldRollbackTaskContent(text, hasToolCall) {
 					hasFinalContent = true
 				}
 				collectMu.Unlock()
 
-				// 本轮结束：若含 tool_call，说明刚才实时推送的 content 其实是“过程旁白”，
-				// 发 content_rollback 让前端把本轮 delta 从正文撤回并改入折叠链。
-				if hasToolCall && contentStreamed && text != "" {
+				// 本轮结束：短 content + tool_call 通常是过程旁白，回滚到折叠链；
+				// 长 content 更可能是模型把最终正文和 update_plan 等工具调用放在同一轮，保留正文避免整段重播。
+				if contentStreamed && shouldRollbackTaskContent(text, hasToolCall) {
 					slog.Info("TaskAgent content_rollback (旁白)", "len", len(text))
 					ch <- TaskStep{Type: "content_rollback", Content: text}
 				}
