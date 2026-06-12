@@ -10,6 +10,7 @@ import { ListSkills } from '../../wailsjs/go/handler/SkillHandler'
 import { List as ListMCPServers } from '../../wailsjs/go/handler/MCPHandler'
 import { ListKnowledgeBases } from '../../wailsjs/go/handler/KnowledgeHandler'
 import { handler as handlerModels, type storage } from '../../wailsjs/go/models'
+import { enabledSkills, filterSelectedEnabledSkillIDs } from '../utils/skills'
 
 const store = useChatStore()
 const input = ref('')
@@ -56,8 +57,6 @@ async function loadKBs() {
 
 // 切换对话时，从 conv 里恢复 mode 和 knowledge_base_id
 watch(() => store.currentConvId, async (convId) => {
-  // 切换对话时强制结束上一次 streaming，避免状态卡住
-  store.setStreaming(false)
   if (!convId) {
     chatMode.value = 'chat'
     selectedKBID.value = ''
@@ -190,10 +189,12 @@ async function loadEnabledModels() {
 }
 
 async function loadSkills() {
-  availableSkills.value = await ListSkills().catch(() => [])
+  availableSkills.value = enabledSkills(await ListSkills().catch(() => []))
+  selectedSkillIDs.value = filterSelectedEnabledSkillIDs(selectedSkillIDs.value, availableSkills.value)
 }
 
 function toggleSkillID(id: string) {
+  if (!availableSkills.value.some(s => s.id === id && s.enabled)) return
   const idx = selectedSkillIDs.value.indexOf(id)
   if (idx >= 0) selectedSkillIDs.value.splice(idx, 1)
   else selectedSkillIDs.value.push(id)
@@ -228,6 +229,7 @@ function toggleSkillPicker() {
 onMounted(() => {
   store.setStreaming(false)  // 应用启动时确保 streaming 不卡住
   loadEnabledModels()
+  loadSkills()
   document.addEventListener('mousedown', onClickOutside)
 })
 onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
@@ -382,6 +384,7 @@ async function sendTask(text: string) {
 async function send() {
   const text = input.value.trim()
   if (!text || !store.currentConvId) return
+  const convID = store.currentConvId
 
   // task 模式走独立路径
   if (chatMode.value === 'task') {
@@ -439,7 +442,7 @@ async function send() {
     created_at: new Date().toISOString(),
   } as any)
 
-  store.setStreaming(true)
+  store.setStreamingForConv(convID, true)
 
   const safetyTimer = setTimeout(() => {
     if (store.streaming) {
@@ -450,13 +453,13 @@ async function send() {
 
   try {
     await StreamChat(handlerModels.SendMessageRequest.createFrom({
-      conversation_id: store.currentConvId,
+      conversation_id: convID,
       content: text,
       provider: providerID,    // provider.id（UUID），后端按 id 查 llm_providers 表
       model: currentModel.value || 'gpt-4o',
       agent_id: store.activeAgentId ?? '',
       mcp_server_ids: selectedMCPIDs.value,
-      skill_ids: selectedSkillIDs.value,
+      skill_ids: filterSelectedEnabledSkillIDs(selectedSkillIDs.value, availableSkills.value),
       web_search: webSearch.value,
       ignore_context: false,
       context_cutoff_id: store.contextCutoffId ?? '',
@@ -469,7 +472,7 @@ async function send() {
     const msg = e?.message || e?.Message || raw
     console.error('chat error:', raw)
     store.appendStream(`\n\n**错误:** ${msg}`)
-    store.setStreaming(false)
+    store.setStreamingForConv(convID, false)
   } finally {
     clearTimeout(safetyTimer)
     // 一次性清除上下文：发送后复位，分割线消失
@@ -483,7 +486,7 @@ async function stop() {
     store.setStreaming(false)
   } else {
     await CancelStream().catch(() => {})
-    store.setStreaming(false)
+    store.stopStreamView()
     store.appendStream('\n\n_已停止_')
   }
 }

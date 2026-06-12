@@ -3,6 +3,9 @@ import type { storage } from '../../wailsjs/go/models'
 import { computed, ref, watch } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
+import HtmlPreviewDialog from './HtmlPreviewDialog.vue'
+import { decorateHtmlPreviewBlocks, getHtmlPreviewSourceFromButton } from '../utils/htmlPreview'
+import { sanitizeRenderedMarkdown } from '../utils/markdownSafe'
 
 marked.setOptions({
   highlight(code: string, lang: string) {
@@ -30,6 +33,7 @@ const emit = defineEmits<{
 const isUser = computed(() => props.msg.role === 'user')
 const thinkingOpen = ref(false)
 const copied = ref(false)
+const previewHtml = ref('')
 
 watch(() => props.streaming, (v) => { if (v) thinkingOpen.value = true })
 
@@ -48,7 +52,7 @@ const content = computed(() => {
 
 const renderedContent = computed(() => {
   if (isUser.value) return content.value
-  return marked.parse(content.value || '') as string
+  return decorateHtmlPreviewBlocks(sanitizeRenderedMarkdown(marked.parse(content.value || '') as string))
 })
 
 const thinkingText = computed(() => props.thinking || props.msg.thinking || '')
@@ -66,6 +70,13 @@ async function copyContent() {
   await navigator.clipboard.writeText(text).catch(() => {})
   copied.value = true
   setTimeout(() => { copied.value = false }, 2000)
+}
+
+function onMarkdownClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  const button = target.closest('.html-preview-run') as HTMLElement | null
+  if (!button) return
+  previewHtml.value = getHtmlPreviewSourceFromButton(button)
 }
 </script>
 
@@ -101,8 +112,9 @@ async function copyContent() {
 
       <!-- 消息正文 -->
       <div class="msg-text" v-if="isUser" v-text="content || ''" />
-      <div class="msg-text markdown-body" v-else v-html="renderedContent || ''" />
+      <div class="msg-text markdown-body" v-else v-html="renderedContent || ''" @click="onMarkdownClick" />
       <span v-if="props.streaming && !isUser" class="cursor" />
+      <HtmlPreviewDialog v-if="previewHtml" :html="previewHtml" @close="previewHtml = ''" />
 
       <!-- 操作按钮：所有历史 assistant 消息 hover 时显示 -->
       <div v-if="!isUser && showActions && !streaming" class="msg-actions">
@@ -247,6 +259,20 @@ async function copyContent() {
   margin: var(--space-2) 0;
   position: relative;
 }
+.markdown-body :deep(.html-preview-block) { position: relative; }
+.markdown-body :deep(.html-preview-run) {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  border: 1px solid oklch(1 0 0 / 0.18);
+  border-radius: var(--radius-sm);
+  background: oklch(0.2 0 0 / 0.9);
+  color: oklch(0.92 0 0);
+  font-size: 11px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.markdown-body :deep(.html-preview-run:hover) { background: var(--color-accent); color: #fff; }
 
 .markdown-body :deep(pre code) {
   background: none;
@@ -279,7 +305,24 @@ async function copyContent() {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
-.markdown-body :deep(table) { border-collapse: collapse; margin: var(--space-2) 0; width: 100%; }
+.markdown-body :deep(img), .markdown-body :deep(svg), .markdown-body :deep(video), .markdown-body :deep(canvas), .markdown-body :deep(iframe) {
+  max-width: 100%;
+  max-height: 360px;
+  height: auto;
+  box-sizing: border-box;
+  object-fit: contain;
+}
+.markdown-body :deep(img), .markdown-body :deep(video), .markdown-body :deep(canvas), .markdown-body :deep(iframe) {
+  display: block;
+  margin: var(--space-2) 0;
+  border-radius: var(--radius-md);
+}
+.markdown-body :deep(iframe) {
+  width: 100%;
+  min-height: 240px;
+  border: 1px solid var(--color-border);
+}
+.markdown-body :deep(table) { border-collapse: collapse; margin: var(--space-2) 0; width: 100%; max-width: 100%; display: block; overflow-x: auto; }
 .markdown-body :deep(th), .markdown-body :deep(td) {
   border: 1px solid var(--color-border);
   padding: var(--space-1) var(--space-2);

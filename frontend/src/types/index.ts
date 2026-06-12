@@ -23,6 +23,7 @@ export interface Setting {
 }
 
 export interface StreamChunk {
+  conv_id?: string
   content: string
   thinking?: string
   done: boolean

@@ -16,14 +16,21 @@ const unsubs: (() => void)[] = []
 
 onMounted(() => {
   unsubs.push(EventsOn('chat:chunk', (chunk: StreamChunk) => {
+    const convID = chunk.conv_id || chatStore.currentConvId || ''
+    if (!convID) return
+    if (convID === chatStore.currentConvId && chatStore.streamStopped) return
     if (chunk.done) {
-      chatStore.setStreaming(false)
+      chatStore.setStreamingForConv(convID, false)
       if (chunk.error) {
-        chatStore.appendStream(`\n\n⚠️ ${chunk.error}`)
+        chatStore.appendStreamForConv(convID, `\n\n⚠️ ${chunk.error}`)
       }
-      chatStore.finishStream(() => {
-        if (chatStore.currentConvId) {
-          GetMessages(chatStore.currentConvId).then(msgs => {
+      chatStore.finishStreamForConv(convID, () => {
+        if (convID) {
+          GetMessages(convID).then(msgs => {
+            if (chatStore.currentConvId !== convID) {
+              chatStore.resetStreamForConv(convID)
+              return
+            }
             chatStore.setMessages(msgs)
             chatStore.resetStream()
           })
@@ -34,10 +41,10 @@ onMounted(() => {
       return
     }
     if (chunk.thinking) {
-      chatStore.appendThinking(chunk.thinking)
+      chatStore.appendThinkingForConv(convID, chunk.thinking)
     }
     if (chunk.content) {
-      chatStore.appendStream(chunk.content)
+      chatStore.appendStreamForConv(convID, chunk.content)
     }
   }))
 })

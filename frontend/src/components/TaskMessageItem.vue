@@ -3,7 +3,11 @@ import { ref, computed } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import { collectArtifacts, splitTaskArtifacts, stripArtifacts, type Artifact } from '../utils/artifacts'
+import { decorateHtmlPreviewBlocks, getHtmlPreviewSourceFromButton } from '../utils/htmlPreview'
+import { shouldShowTaskActions, taskCopyText } from '../utils/taskActions'
+import { sanitizeRenderedMarkdown } from '../utils/markdownSafe'
 import ArtifactCard from './ArtifactCard.vue'
+import HtmlPreviewDialog from './HtmlPreviewDialog.vue'
 
 marked.setOptions({
   highlight(code: string, lang: string) {
@@ -37,11 +41,16 @@ const props = defineProps<{
   notice?: string
   artifactsJson?: string  // 历史消息的产物 JSON（[]Artifact），优先于从 steps 收集
   attachmentsMeta?: string // 附件元数据 JSON（[]{ name, mime_type }）
+  canRegenerate?: boolean
+}>()
+
+const emit = defineEmits<{
+  regenerate: []
 }>()
 
 const userHtml = computed(() => {
   if (!props.userContent) return ''
-  return marked(props.userContent) as string
+  return sanitizeRenderedMarkdown(marked(props.userContent) as string)
 })
 
 const finalContent = computed(() =>
@@ -54,7 +63,7 @@ const finalContent = computed(() =>
 // marked 对不完整语法容错良好，下一帧即修正。
 const finalHtml = computed(() => {
   if (!finalContent.value) return ''
-  return marked(finalContent.value) as string
+  return decorateHtmlPreviewBlocks(sanitizeRenderedMarkdown(marked(finalContent.value) as string))
 })
 
 const showTaskLoading = computed(() => props.streaming && !finalContent.value && !props.notice)
@@ -77,6 +86,8 @@ const chainSteps = computed(() => {
 
 // 推理链整体折叠状态（默认折叠）
 const chainOpen = ref(false)
+const copied = ref(false)
+const previewHtml = ref('')
 
 // 推理链步骤摘要（用于折叠时显示）
 const chainSummary = computed(() => {
@@ -136,6 +147,21 @@ function toolIcon(name?: string) {
   if (name === 'web_search') return '🌐'
   return '⚙'
 }
+
+const showActions = computed(() => shouldShowTaskActions(props.role, props.streaming, !!finalContent.value))
+
+async function copyTaskContent() {
+  await navigator.clipboard.writeText(taskCopyText(finalContent.value, props.steps)).catch(() => {})
+  copied.value = true
+  setTimeout(() => { copied.value = false }, 2000)
+}
+
+function onMarkdownClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  const button = target.closest('.html-preview-run') as HTMLElement | null
+  if (!button) return
+  previewHtml.value = getHtmlPreviewSourceFromButton(button)
+}
 </script>
 
 <template>
@@ -144,7 +170,6 @@ function toolIcon(name?: string) {
     <div class="task-msg-content">
       <div class="task-msg-label">{{ role === 'user' ? '你' : 'AI 助手' }}</div>
 
-      <!-- 用户消息 -->
       <template v-if="role === 'user'">
         <div v-if="attachmentMetas.length > 0" class="task-msg__attachments">
           <span v-for="(a, i) in attachmentMetas" :key="i" class="task-attachment-chip">
@@ -156,111 +181,106 @@ function toolIcon(name?: string) {
         <div class="task-user-text" v-html="userHtml" />
       </template>
 
-      <!-- AI task 消息 -->
       <template v-else>
-
-    <!-- 历史模式：plan（顶部）+ markdown + 文件产物区 -->
-    <template v-if="isHistory">
-      <ArtifactCard v-for="(p, i) in planArtifacts" :key="'plan-' + i" :artifact="p" />
-      <div class="task-answer__bubble markdown-body" v-html="finalHtml" />
-      <div v-if="fileArtifacts.length > 0" class="task-files">
-        <div class="task-files__title">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          本次涉及的文件（{{ fileArtifacts.length }}）
-        </div>
-        <ArtifactCard v-for="(art, i) in fileArtifacts" :key="i" :artifact="art" />
-      </div>
-    </template>
-
-    <!-- 流式模式 -->
-    <template v-else>
-
-      <!-- 执行计划（置于顶部，作为执行导航） -->
-      <ArtifactCard v-for="(p, i) in planArtifacts" :key="'plan-' + i" :artifact="p" />
-
-      <!-- 推理链：整体折叠 -->
-      <div v-if="chainSteps.length" class="task-chain">
-        <!-- 折叠头部 -->
-        <button class="chain-header" @click="chainOpen = !chainOpen">
-          <span class="chain-header__left">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 8v4l3 3"/></svg>
-            <span class="chain-header__label">{{ chainSummary }}</span>
-          </span>
-          <svg class="chain-header__chevron" :class="{ open: chainOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-        </button>
-
-        <!-- 展开内容：所有步骤平铺 -->
-        <div v-if="chainOpen" class="chain-body">
-          <template v-for="(step, i) in chainSteps" :key="i">
-
-            <!-- thinking -->
-            <div v-if="step.type === 'thinking'" class="chain-step chain-step--think">
-              <span class="chain-step__icon">💭</span>
-              <span class="chain-step__text">{{ step.content }}</span>
+        <template v-if="isHistory">
+          <ArtifactCard v-for="(p, i) in planArtifacts" :key="'plan-' + i" :artifact="p" />
+          <div class="task-answer__bubble markdown-body" v-html="finalHtml" @click="onMarkdownClick" />
+          <div v-if="showActions" class="task-msg-actions">
+            <button class="task-msg-action" :class="{ copied }" @click="copyTaskContent" :title="copied ? '已复制' : '复制'">
+              <svg v-if="copied" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <button v-if="canRegenerate !== false" class="task-msg-action" @click="emit('regenerate')" title="重新生成">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>
+            </button>
+          </div>
+          <div v-if="fileArtifacts.length > 0" class="task-files">
+            <div class="task-files__title">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              本次涉及的文件（{{ fileArtifacts.length }}）
             </div>
-
-            <!-- content_note：含 tool_call 轮次的过程旁白 -->
-            <div v-else-if="step.type === 'content_note'" class="chain-step chain-step--note">
-              <span class="chain-step__icon">📝</span>
-              <span class="chain-step__text">{{ step.content }}</span>
-            </div>
-
-            <!-- tool_call -->
-            <div v-else-if="step.type === 'tool_call'" class="chain-step chain-step--tool">
-              <span class="chain-step__icon">{{ toolIcon(step.tool_name) }}</span>
-              <span class="chain-step__tool-name">{{ step.tool_name }}</span>
-              <pre v-if="step.tool_args" class="chain-step__code">{{ formatArgs(step.tool_args) }}</pre>
-            </div>
-
-            <!-- tool_result（产物统一在底部产物区展示，这里只显示文本，剥离产物标记） -->
-            <div v-else-if="step.type === 'tool_result'" class="chain-step chain-step--result">
-              <span class="chain-step__icon chain-step__icon--result">↳</span>
-              <pre class="chain-step__result">{{ truncate(stripArtifacts(step.tool_result)) }}</pre>
-            </div>
-
-            <!-- bash_output -->
-            <div v-else-if="step.type === 'bash_output'" class="chain-step chain-step--bash">
-              <pre class="chain-step__bash">{{ step.content }}</pre>
-            </div>
-
-            <!-- error -->
-            <div v-else-if="step.type === 'error'" class="chain-step chain-step--error">
-              <span class="chain-step__icon">✗</span>
-              <span>{{ step.error }}</span>
-            </div>
-
-          </template>
-        </div>
-      </div>
-
-      <!-- 流式内容 / 最终回答 -->
-      <div v-if="finalContent || streaming || notice" class="task-answer">
-        <div v-if="notice" class="task-notice">{{ notice }}</div>
-        <div v-if="showTaskLoading" class="task-loading">
-          <span class="task-loading__dot" />
-          <span class="task-loading__dot" />
-          <span class="task-loading__dot" />
-          <span class="task-loading__text">正在处理任务…</span>
-        </div>
-        <template v-else>
-          <div v-if="finalContent" class="task-answer__bubble markdown-body" v-html="finalHtml" />
-          <span v-if="streaming" class="task-cursor">▋</span>
+            <ArtifactCard v-for="(art, i) in fileArtifacts" :key="i" :artifact="art" />
+          </div>
         </template>
-      </div>
 
-      <!-- 本次涉及的产物（文件/链接/图片…）：从工具结果自动收集，常驻显示 -->
-      <div v-if="fileArtifacts.length > 0" class="task-files">
-        <div class="task-files__title">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          本次涉及的文件（{{ fileArtifacts.length }}）
-        </div>
-        <ArtifactCard v-for="(art, i) in fileArtifacts" :key="i" :artifact="art" />
-      </div>
+        <template v-else>
+          <ArtifactCard v-for="(p, i) in planArtifacts" :key="'plan-' + i" :artifact="p" />
 
+          <div v-if="chainSteps.length" class="task-chain">
+            <button class="chain-header" @click="chainOpen = !chainOpen">
+              <span class="chain-header__left">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 8v4l3 3"/></svg>
+                <span class="chain-header__label">{{ chainSummary }}</span>
+              </span>
+              <svg class="chain-header__chevron" :class="{ open: chainOpen }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+
+            <div v-if="chainOpen" class="chain-body">
+              <template v-for="(step, i) in chainSteps" :key="i">
+                <div v-if="step.type === 'thinking'" class="chain-step chain-step--think">
+                  <span class="chain-step__icon">💭</span>
+                  <span class="chain-step__text">{{ step.content }}</span>
+                </div>
+                <div v-else-if="step.type === 'content_note'" class="chain-step chain-step--note">
+                  <span class="chain-step__icon">📝</span>
+                  <span class="chain-step__text">{{ step.content }}</span>
+                </div>
+                <div v-else-if="step.type === 'tool_call'" class="chain-step chain-step--tool">
+                  <span class="chain-step__icon">{{ toolIcon(step.tool_name) }}</span>
+                  <span class="chain-step__tool-name">{{ step.tool_name }}</span>
+                  <pre v-if="step.tool_args" class="chain-step__code">{{ formatArgs(step.tool_args) }}</pre>
+                </div>
+                <div v-else-if="step.type === 'tool_result'" class="chain-step chain-step--result">
+                  <span class="chain-step__icon chain-step__icon--result">↳</span>
+                  <pre class="chain-step__result">{{ truncate(stripArtifacts(step.tool_result)) }}</pre>
+                </div>
+                <div v-else-if="step.type === 'bash_output'" class="chain-step chain-step--bash">
+                  <pre class="chain-step__bash">{{ step.content }}</pre>
+                </div>
+                <div v-else-if="step.type === 'error'" class="chain-step chain-step--error">
+                  <span class="chain-step__icon">✗</span>
+                  <span>{{ step.error }}</span>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div v-if="finalContent || streaming || notice" class="task-answer">
+            <div v-if="notice" class="task-notice">{{ notice }}</div>
+            <div v-if="showTaskLoading" class="task-loading">
+              <span class="task-loading__dot" />
+              <span class="task-loading__dot" />
+              <span class="task-loading__dot" />
+              <span class="task-loading__text">正在处理任务…</span>
+            </div>
+            <template v-else>
+              <div v-if="finalContent" class="task-answer__bubble markdown-body" v-html="finalHtml" @click="onMarkdownClick" />
+              <span v-if="streaming" class="task-cursor">▋</span>
+            </template>
+          </div>
+
+          <div v-if="showActions" class="task-msg-actions">
+            <button class="task-msg-action" :class="{ copied }" @click="copyTaskContent" :title="copied ? '已复制' : '复制'">
+              <svg v-if="copied" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <button v-if="canRegenerate !== false" class="task-msg-action" @click="emit('regenerate')" title="重新生成">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>
+            </button>
+          </div>
+
+          <div v-if="fileArtifacts.length > 0" class="task-files">
+            <div class="task-files__title">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              本次涉及的文件（{{ fileArtifacts.length }}）
+            </div>
+            <ArtifactCard v-for="(art, i) in fileArtifacts" :key="i" :artifact="art" />
+          </div>
+        </template>
       </template>
-    </template>
+    </div>
   </div>
-  </div>
+  <HtmlPreviewDialog v-if="previewHtml" :html="previewHtml" @close="previewHtml = ''" />
 </template>
 
 <style scoped>
@@ -287,6 +307,10 @@ function toolIcon(name?: string) {
   font-size: var(--text-xs); font-weight: 600;
   color: var(--color-text-2); margin-bottom: var(--space-1);
 }
+.task-msg-actions { display: inline-flex; gap: var(--space-1); margin-top: var(--space-2); opacity: 0; transition: opacity var(--duration-fast); }
+.task-msg-row:hover .task-msg-actions, .task-msg-content:hover .task-msg-actions { opacity: 1; }
+.task-msg-action { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-3); cursor: pointer; }
+.task-msg-action:hover, .task-msg-action.copied { background: var(--color-paper-3); color: var(--color-accent); }
 
 .task-msg__attachments {
   display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-2);
@@ -337,6 +361,20 @@ function toolIcon(name?: string) {
   overflow-x: auto;
   margin: var(--space-2) 0;
 }
+.markdown-body :deep(.html-preview-block) { position: relative; }
+.markdown-body :deep(.html-preview-run) {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  border: 1px solid oklch(1 0 0 / 0.18);
+  border-radius: var(--radius-sm);
+  background: oklch(0.2 0 0 / 0.9);
+  color: oklch(0.92 0 0);
+  font-size: 11px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.markdown-body :deep(.html-preview-run:hover) { background: var(--color-accent); color: #fff; }
 .markdown-body :deep(pre code) {
   background: none;
   padding: var(--space-3) var(--space-4);
@@ -364,7 +402,24 @@ function toolIcon(name?: string) {
   background: var(--color-accent-soft);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
-.markdown-body :deep(table) { border-collapse: collapse; margin: var(--space-2) 0; width: 100%; }
+.markdown-body :deep(img), .markdown-body :deep(svg), .markdown-body :deep(video), .markdown-body :deep(canvas), .markdown-body :deep(iframe) {
+  max-width: 100%;
+  max-height: 360px;
+  height: auto;
+  box-sizing: border-box;
+  object-fit: contain;
+}
+.markdown-body :deep(img), .markdown-body :deep(video), .markdown-body :deep(canvas), .markdown-body :deep(iframe) {
+  display: block;
+  margin: var(--space-2) 0;
+  border-radius: var(--radius-md);
+}
+.markdown-body :deep(iframe) {
+  width: 100%;
+  min-height: 240px;
+  border: 1px solid var(--color-border);
+}
+.markdown-body :deep(table) { border-collapse: collapse; margin: var(--space-2) 0; width: 100%; max-width: 100%; display: block; overflow-x: auto; }
 .markdown-body :deep(th), .markdown-body :deep(td) {
   border: 1px solid var(--color-border);
   padding: var(--space-1) var(--space-2);

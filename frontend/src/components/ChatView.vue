@@ -6,6 +6,7 @@ import InputArea from './InputArea.vue'
 import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
+import { StreamTask } from '../../wailsjs/go/handler/TaskHandler'
 import type { storage } from '../../wailsjs/go/models'
 import { isNearBottom, shouldAutoScroll } from '../utils/scroll'
 import { shouldShowTaskHistory } from '../utils/taskHistory'
@@ -42,6 +43,142 @@ const streamingContent = ref('')
 const currentNotice = ref('')
 // 是否正在流式输出 task
 const taskStreaming = ref(false)
+const taskStopped = ref(false)
+
+interface TaskViewState {
+  completedRounds: TaskRound[]
+  currentTaskSteps: TaskStep[]
+  currentTaskUserContent: string
+  currentTaskAttachmentsMeta: string
+  streamingContent: string
+  currentNotice: string
+  taskStreaming: boolean
+  taskStopped: boolean
+}
+
+const taskStates = new Map<string, TaskViewState>()
+
+function emptyTaskState(): TaskViewState {
+  return {
+    completedRounds: [],
+    currentTaskSteps: [],
+    currentTaskUserContent: '',
+    currentTaskAttachmentsMeta: '',
+    streamingContent: '',
+    currentNotice: '',
+    taskStreaming: false,
+    taskStopped: false,
+  }
+}
+
+function getTaskState(convID: string): TaskViewState {
+  let state = taskStates.get(convID)
+  if (!state) {
+    state = emptyTaskState()
+    taskStates.set(convID, state)
+  }
+  return state
+}
+
+function saveCurrentTaskState(convID: string) {
+  taskStates.set(convID, {
+    completedRounds: [...completedRounds.value],
+    currentTaskSteps: [...currentTaskSteps.value],
+    currentTaskUserContent: currentTaskUserContent.value,
+    currentTaskAttachmentsMeta: currentTaskAttachmentsMeta.value,
+    streamingContent: streamingContent.value,
+    currentNotice: currentNotice.value,
+    taskStreaming: taskStreaming.value,
+    taskStopped: taskStopped.value,
+  })
+}
+
+function applyTaskState(convID: string | null) {
+  const state = convID ? getTaskState(convID) : emptyTaskState()
+  completedRounds.value = [...state.completedRounds]
+  currentTaskSteps.value = [...state.currentTaskSteps]
+  currentTaskUserContent.value = state.currentTaskUserContent
+  currentTaskAttachmentsMeta.value = state.currentTaskAttachmentsMeta
+  streamingContent.value = state.streamingContent
+  currentNotice.value = state.currentNotice
+  taskStreaming.value = state.taskStreaming
+  taskStopped.value = state.taskStopped
+  store.setStreaming(state.taskStreaming)
+}
+
+function applyStepToTaskState(state: TaskViewState, evt: TaskStepEvent) {
+  if (evt.type === 'user_msg') {
+    state.currentTaskSteps = []
+    state.streamingContent = ''
+    state.currentNotice = ''
+    state.currentTaskUserContent = evt.user_content || evt.content || ''
+    state.currentTaskAttachmentsMeta = evt.attachments_meta || ''
+    state.taskStopped = false
+    state.taskStreaming = true
+    return
+  }
+  if (evt.type === 'content') {
+    if (!state.taskStopped) state.streamingContent += evt.content || ''
+    return
+  }
+  if (evt.type === 'content_note') {
+    if (!state.taskStopped) state.currentTaskSteps.push({ type: 'content_note', content: evt.content })
+    return
+  }
+  if (evt.type === 'content_rollback') {
+    if (state.taskStopped) return
+    const seg = evt.content || ''
+    if (seg && state.streamingContent.endsWith(seg)) {
+      state.streamingContent = state.streamingContent.slice(0, -seg.length)
+    } else if (seg) {
+      state.streamingContent = state.streamingContent.slice(0, Math.max(0, state.streamingContent.length - seg.length))
+    }
+    if (seg.length <= 1200) state.currentTaskSteps.push({ type: 'content_note', content: seg })
+    return
+  }
+  if (evt.type === 'notice') {
+    if (!state.taskStopped) state.currentNotice = evt.content || ''
+    return
+  }
+  if (evt.type === 'done') {
+    if (state.taskStopped) return
+    state.taskStreaming = false
+    state.completedRounds.push({
+      userContent: state.currentTaskUserContent,
+      attachmentsMeta: state.currentTaskAttachmentsMeta,
+      steps: [...state.currentTaskSteps],
+      assistantContent: state.streamingContent,
+      notice: state.currentNotice,
+    })
+    state.currentTaskSteps = []
+    state.streamingContent = ''
+    state.currentNotice = ''
+    state.currentTaskUserContent = ''
+    return
+  }
+  if (evt.type === 'stopped') {
+    state.taskStopped = true
+    state.taskStreaming = false
+    return
+  }
+  if (evt.type === 'error') {
+    if (state.taskStopped) return
+    state.currentTaskSteps.push({ type: 'error', error: evt.error || '未知错误' })
+    state.taskStreaming = false
+    return
+  }
+  if (state.taskStopped) return
+  state.currentTaskSteps.push({
+    type: evt.type as TaskStep['type'],
+    content: evt.content,
+    tool_name: evt.tool_name,
+    tool_args: evt.tool_args,
+    tool_result: evt.tool_result,
+    confirm_id: evt.confirm_id,
+    cmd: evt.cmd,
+    error: evt.error,
+  })
+}
 
 // 当前会话是否为 task 模式
 const isTaskMode = computed(() => {
@@ -65,15 +202,10 @@ async function loadTaskHistory() {
   }
 }
 
-// 监听会话切换：清空当前轮次，重新加载历史
-watch(() => store.currentConvId, async () => {
-  completedRounds.value = []
-  currentTaskSteps.value = []
-  streamingContent.value = ''
-  currentNotice.value = ''
-  currentTaskUserContent.value = ''
-  currentTaskAttachmentsMeta.value = ''
-  taskStreaming.value = false
+// 监听会话切换：保存/恢复每个 task 会话自己的流式状态，避免后台生成被 UI 切换打断。
+watch(() => store.currentConvId, async (convID, oldConvID) => {
+  if (oldConvID) saveCurrentTaskState(oldConvID)
+  applyTaskState(convID)
   taskUserScrolled = false
   if (isTaskMode.value) await loadTaskHistory()
   scrollTaskToBottom(true)
@@ -100,99 +232,44 @@ interface TaskStepEvent {
 }
 
 function onTaskStep(evt: TaskStepEvent) {
-  if (evt.type === 'user_msg') {
-    currentTaskSteps.value = []
-    streamingContent.value = ''
-    currentNotice.value = ''
-    currentTaskUserContent.value = evt.user_content || evt.content || ''
-    currentTaskAttachmentsMeta.value = evt.attachments_meta || ''
-    taskUserScrolled = false
-    taskStreaming.value = true
-    store.setStreaming(true)
-    scrollTaskToBottom(true)
-    return
-  }
+  const convID = evt.conv_id || store.currentConvId
+  if (!convID) return
+  if (convID === store.currentConvId) saveCurrentTaskState(convID)
+  const state = getTaskState(convID)
+  applyStepToTaskState(state, evt)
+  if (convID !== store.currentConvId) return
+  applyTaskState(convID)
+  taskUserScrolled = evt.type === 'user_msg' ? false : taskUserScrolled
+  if (evt.type !== 'stopped') scrollTaskToBottom(evt.type === 'user_msg')
+}
 
-  if (evt.type === 'content') {
-    streamingContent.value += evt.content || ''
-    scrollTaskToBottom()
-    return
-  }
-
-  // content_note：含 tool_call 轮次的过程旁白 → 归入折叠链，不进正文
-  if (evt.type === 'content_note') {
-    currentTaskSteps.value.push({ type: 'content_note', content: evt.content })
-    scrollTaskToBottom()
-    return
-  }
-
-  // content_rollback：本轮实时推送的 content 其实是“过程旁白”（该轮含 tool_call）。
-  // 把这段内容从正文末尾撤回，改入折叠链作 content_note。
-  if (evt.type === 'content_rollback') {
-    const seg = evt.content || ''
-    if (seg && streamingContent.value.endsWith(seg)) {
-      streamingContent.value = streamingContent.value.slice(0, -seg.length)
-    } else if (seg) {
-      // 兜底：按长度从尾部移除（chunk 拼接与聚合文本理论一致）
-      streamingContent.value = streamingContent.value.slice(0, Math.max(0, streamingContent.value.length - seg.length))
-    }
-    // 大段 tool-call 轮内容通常是模型误把“最终总结”伴随 update_plan 一起吐出。
-    // 已从正文回滚即可，不再塞进推理链，避免最终界面看起来像总结输出了两次。
-    if (seg.length <= 1200) {
-      currentTaskSteps.value.push({ type: 'content_note', content: seg })
-    }
-    scrollTaskToBottom()
-    return
-  }
-
-  // notice：撞上限/死循环的提示语
-  if (evt.type === 'notice') {
-    currentNotice.value = evt.content || ''
-    scrollTaskToBottom()
-    return
-  }
-
-  if (evt.type === 'done') {
-    taskStreaming.value = false
+async function regenerateTask(userContent: string, attachmentsMeta = '') {
+  if (!store.currentConvId || store.streaming || !userContent.trim()) return
+  const conv = store.conversations.find(c => c.id === store.currentConvId) as any
+  if (!conv) return
+  currentTaskSteps.value = []
+  streamingContent.value = ''
+  currentNotice.value = ''
+  currentTaskUserContent.value = ''
+  currentTaskAttachmentsMeta.value = ''
+  taskStopped.value = false
+  saveCurrentTaskState(store.currentConvId)
+  store.setStreaming(true)
+  try {
+    await StreamTask({
+      conversation_id: store.currentConvId,
+      content: userContent,
+      provider: conv.provider,
+      model: conv.model,
+      work_dir: conv.work_dir || '',
+      ignore_context: false,
+      attachments: [],
+    } as any)
+  } catch (e) {
+    console.error('task regenerate failed:', e)
+  } finally {
     store.setStreaming(false)
-    // 把本轮推理链存入 completedRounds，永久显示
-    completedRounds.value.push({
-      userContent: currentTaskUserContent.value,
-      attachmentsMeta: currentTaskAttachmentsMeta.value,
-      steps: [...currentTaskSteps.value],
-      assistantContent: streamingContent.value,
-      notice: currentNotice.value,
-    })
-    // 清空当前流式状态
-    currentTaskSteps.value = []
-    streamingContent.value = ''
-    currentNotice.value = ''
-    currentTaskUserContent.value = ''
-    scrollTaskToBottom()
-    return
   }
-
-  if (evt.type === 'error') {
-    currentTaskSteps.value.push({ type: 'error', error: evt.error || '未知错误' })
-    taskStreaming.value = false
-    store.setStreaming(false)
-    scrollTaskToBottom()
-    return
-  }
-
-  // thinking / tool_call / tool_result / bash_output 等
-  const step: TaskStep = {
-    type: evt.type as TaskStep['type'],
-    content: evt.content,
-    tool_name: evt.tool_name,
-    tool_args: evt.tool_args,
-    tool_result: evt.tool_result,
-    confirm_id: evt.confirm_id,
-    cmd: evt.cmd,
-    error: evt.error,
-  }
-  currentTaskSteps.value.push(step)
-  scrollTaskToBottom()
 }
 
 function isTaskAtBottom(): boolean {
@@ -248,7 +325,7 @@ onUnmounted(() => {
 
       <!-- 跨会话恢复：DB 历史始终显示；当前会话新完成轮次追加在其后，避免结束后历史区消失 -->
       <template v-if="showTaskHistory">
-        <template v-for="msg in taskHistoryMsgs" :key="msg.id">
+        <template v-for="(msg, idx) in taskHistoryMsgs" :key="msg.id">
           <TaskMessageItem
             :role="msg.role as 'user' | 'assistant'"
             :user-content="msg.role === 'user' ? msg.content : undefined"
@@ -256,6 +333,8 @@ onUnmounted(() => {
             :artifacts-json="(msg as any).artifacts"
             :attachments-meta="msg.role === 'user' ? (msg as any).attachments : undefined"
             :is-history="true"
+            :can-regenerate="!(taskHistoryMsgs[idx - 1] as any)?.attachments"
+            @regenerate="msg.role === 'assistant' && regenerateTask(taskHistoryMsgs[idx - 1]?.role === 'user' ? taskHistoryMsgs[idx - 1].content : '')"
           />
         </template>
       </template>
@@ -274,6 +353,8 @@ onUnmounted(() => {
           :streaming-content="round.assistantContent"
           :notice="round.notice"
           :is-history="false"
+          :can-regenerate="!round.attachmentsMeta"
+          @regenerate="regenerateTask(round.userContent, round.attachmentsMeta)"
         />
       </template>
 

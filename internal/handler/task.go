@@ -32,6 +32,10 @@ type TaskHandler struct {
 	bashTools  map[string]*eino.BashTool // convID → BashTool（当前活跃）
 }
 
+func shouldForwardTaskStep(ctx context.Context, step eino.TaskStep) bool {
+	return ctx.Err() == nil
+}
+
 // NewTaskHandler 创建 TaskHandler。
 func NewTaskHandler(chat *eino.ChatService) *TaskHandler {
 	return &TaskHandler{
@@ -69,7 +73,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	if _, err := os.Stat(req.WorkDir); err != nil {
 		msg := fmt.Sprintf("工作目录不存在: %s", req.WorkDir)
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: msg})
-		return fmt.Errorf(msg)
+		return fmt.Errorf("%s", msg)
 	}
 
 	// 取消前一个同 conv 的 task
@@ -101,7 +105,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	if providerType != "ollama" && apiKey == "" {
 		msg := fmt.Sprintf("请先在设置中配置 %s 的 API Key", req.Provider)
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: msg})
-		return fmt.Errorf(msg)
+		return fmt.Errorf("%s", msg)
 	}
 	if err := h.chat.Configure(providerType, req.Model, apiKey, baseURL); err != nil {
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: err.Error()})
@@ -112,7 +116,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	if llm == nil {
 		msg := "当前模型不支持 tool calling，请切换模型"
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: msg})
-		return fmt.Errorf(msg)
+		return fmt.Errorf("%s", msg)
 	}
 	slog.Info("StreamTask: LLM configured", "provider", req.Provider, "model", req.Model)
 
@@ -278,6 +282,9 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 		return string(b)
 	}
 	for step := range stepCh {
+		if !shouldForwardTaskStep(ctx, step) {
+			continue
+		}
 		step.ConvID = req.ConversationID
 		slog.Info("StreamTask: step", "type", step.Type, "content_len", len(step.Content))
 		if step.Type == "content" {
@@ -351,6 +358,10 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 
 	// channel 关闭但没有 done（context canceled / 超时）→ 补发 done 保证前端不卡住
 	if !hadDone {
+		if ctx.Err() != nil {
+			slog.Info("StreamTask: task cancelled, skip fallback save/done", "convID", req.ConversationID)
+			return nil
+		}
 		slog.Info("StreamTask: agent stopped without done, emitting fallback done", "finalContent_len", len(finalContent), "convID", req.ConversationID)
 		if finalContent != "" {
 			msgID, err := storage.SaveTaskMessageWithArtifacts(req.ConversationID, "assistant", finalContent, artifactsJSON())
@@ -413,6 +424,7 @@ func (h *TaskHandler) StopTask(convID string) error {
 	h.cancelMu.Unlock()
 	if ok {
 		cancel()
+		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: convID, Type: "stopped"})
 	}
 	return nil
 }

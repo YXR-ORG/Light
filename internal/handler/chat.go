@@ -24,6 +24,7 @@ import (
 	"light-ai/internal/eino"
 	"light-ai/internal/storage"
 )
+
 // maxToolLoops prevents infinite tool-call cycles.
 const maxToolLoops = 15
 
@@ -49,21 +50,21 @@ type Attachment struct {
 }
 
 type SendMessageRequest struct {
-	ConversationID    string       `json:"conversation_id"`
-	Content           string       `json:"content"`
-	Provider          string       `json:"provider"`
-	Model             string       `json:"model"`
-	AgentID           string       `json:"agent_id"`
-	MCPServerIDs      []string     `json:"mcp_server_ids"`
-	SkillIDs          []string     `json:"skill_ids"`
-	WebSearch         bool         `json:"web_search"`
-	IgnoreContext     bool         `json:"ignore_context"`
-	ContextCutoffID   string       `json:"context_cutoff_id"`
-	Attachments       []Attachment `json:"attachments"`
-	Mode              string       `json:"mode"`
-	KnowledgeBaseID   string       `json:"knowledge_base_id"`
+	ConversationID  string       `json:"conversation_id"`
+	Content         string       `json:"content"`
+	Provider        string       `json:"provider"`
+	Model           string       `json:"model"`
+	AgentID         string       `json:"agent_id"`
+	MCPServerIDs    []string     `json:"mcp_server_ids"`
+	SkillIDs        []string     `json:"skill_ids"`
+	WebSearch       bool         `json:"web_search"`
+	IgnoreContext   bool         `json:"ignore_context"`
+	ContextCutoffID string       `json:"context_cutoff_id"`
+	Attachments     []Attachment `json:"attachments"`
+	Mode            string       `json:"mode"`
+	KnowledgeBaseID string       `json:"knowledge_base_id"`
 	// 重新生成：传入已有 group id，后端在该 group 追加新版本
-	RegenerateGroupID string       `json:"regenerate_group_id"`
+	RegenerateGroupID string `json:"regenerate_group_id"`
 }
 
 type SendMessageResponse struct {
@@ -71,6 +72,7 @@ type SendMessageResponse struct {
 }
 
 type StreamChunk struct {
+	ConvID   string `json:"conv_id,omitempty"`
 	Content  string `json:"content"`
 	Thinking string `json:"thinking,omitempty"`
 	Done     bool   `json:"done"`
@@ -267,12 +269,12 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 
 	if providerType != "ollama" && apiKey == "" {
 		err := fmt.Errorf("请先在设置中配置 %s 的 API Key", req.Provider)
-		runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true, Error: err.Error()})
+		runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: req.ConversationID, Done: true, Error: err.Error()})
 		return err
 	}
 
 	if err := h.chat.Configure(providerType, req.Model, apiKey, baseURL); err != nil {
-		runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true, Error: err.Error()})
+		runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: req.ConversationID, Done: true, Error: err.Error()})
 		return err
 	}
 
@@ -296,7 +298,7 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 			engine = "tavily"
 		}
 		if apiKey == "" && engine != "searxng" {
-			runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true,
+			runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: req.ConversationID, Done: true,
 				Error: fmt.Sprintf("请先在设置中配置 %s 的 API Key", engine)})
 			return fmt.Errorf("%s api key not configured", engine)
 		}
@@ -308,6 +310,10 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 			skill, err := storage.GetSkill(sid)
 			if err != nil {
 				slog.Warn("skill not found", "id", sid)
+				continue
+			}
+			if !skill.Enabled {
+				slog.Info("skip disabled skill", "id", sid, "name", skill.Name)
 				continue
 			}
 			allTools = append(allTools, eino.NewSkillTool(skill.ID, skill.Name, skill.Description, skill.Content))
@@ -363,7 +369,7 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 	// 构建 einoMsgs 用最新版本（每个 group 只取 gen_index 最大的）
 	history, err := storage.GetLatestMessages(req.ConversationID)
 	if err != nil {
-		runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true, Error: err.Error()})
+		runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: req.ConversationID, Done: true, Error: err.Error()})
 		return err
 	}
 
@@ -425,7 +431,7 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 		}
 	}
 
-	fullContent, fullThinking := h.runToolLoop(ctx, einoMsgs)
+	fullContent, fullThinking := h.runToolLoop(ctx, req.ConversationID, einoMsgs)
 
 	// 只有非空回复才存库
 	if fullContent != "" {
@@ -493,6 +499,7 @@ func extractTitle(text string, maxChars int) string {
 	}
 	return strings.TrimSpace(string(runes))
 }
+
 // buildUserMessage constructs a user message, with optional multimodal attachments.
 func buildUserMessage(content string, attachments []Attachment) *schema.Message {
 	if len(attachments) == 0 {
@@ -581,14 +588,15 @@ func historyToEinoMsg(m storage.Message) *schema.Message {
 	return msg
 }
 
-func (h *ChatHandler) runToolLoop(ctx context.Context, messages []*schema.Message) (string, string) {	fullContent := ""
+func (h *ChatHandler) runToolLoop(ctx context.Context, convID string, messages []*schema.Message) (string, string) {
+	fullContent := ""
 	fullThinking := ""
 
 	for loopCount := 0; loopCount < maxToolLoops; loopCount++ {
 		stream, err := h.chat.Stream(ctx, messages)
 		if err != nil {
 			slog.Error("StreamChat stream failed", "error", err)
-			runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true, Error: err.Error()})
+			runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Done: true, Error: err.Error()})
 			return fullContent, fullThinking
 		}
 
@@ -603,12 +611,12 @@ func (h *ChatHandler) runToolLoop(ctx context.Context, messages []*schema.Messag
 			chunks = append(chunks, chunk)
 			if chunk.ReasoningContent != "" {
 				fullThinking += chunk.ReasoningContent
-				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Thinking: chunk.ReasoningContent})
+				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Thinking: chunk.ReasoningContent})
 			}
 			if chunk.Content != "" {
 				chunkContent += chunk.Content
 				fullContent += chunk.Content
-				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Content: chunk.Content})
+				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Content: chunk.Content})
 			}
 		}
 		stream.Close()
@@ -628,7 +636,7 @@ func (h *ChatHandler) runToolLoop(ctx context.Context, messages []*schema.Messag
 			// LLM 返回了空内容且无 tool call（网络抖动或 API 异常）
 			if len(chunkContent) == 0 && loopCount == 0 {
 				slog.Warn("runToolLoop: empty response from LLM on first iteration")
-				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{
+				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID,
 					Content: "（模型返回了空响应，请重试）",
 				})
 			}
@@ -645,7 +653,7 @@ func (h *ChatHandler) runToolLoop(ctx context.Context, messages []*schema.Messag
 			toolName := tc.Function.Name
 			toolArgs := tc.Function.Arguments
 			slog.Info("Calling tool", "name", toolName, "args", toolArgs)
-			runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{
+			runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID,
 				Content: fmt.Sprintf("\n🔧 调用工具: %s...\n", toolName),
 			})
 			result, toolErr := h.chat.RunTool(ctx, toolName, toolArgs)
@@ -662,7 +670,6 @@ func (h *ChatHandler) runToolLoop(ctx context.Context, messages []*schema.Messag
 		fullContent = ""
 	}
 
-	runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{Done: true})
+	runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Done: true})
 	return fullContent, fullThinking
 }
-

@@ -14,6 +14,8 @@ export const useChatStore = defineStore('chat', () => {
   const streaming = ref(false)
   const streamContent = ref('')
   const streamThinking = ref('')
+  const streamStopped = ref(false)
+  const streamStates = ref<Record<string, { content: string; thinking: string; streaming: boolean; stopped: boolean }>>({})
   // ID of the last message BEFORE the context cutoff (null = no cutoff)
   const contextCutoffId = ref<string | null>(null)
   const activeAgentId = ref<string | null>(null)
@@ -33,6 +35,7 @@ export const useChatStore = defineStore('chat', () => {
       const take = Math.min(CHARS_PER_TICK, pendingQueue.length)
       streamContent.value += pendingQueue.slice(0, take)
       pendingQueue = pendingQueue.slice(take)
+      saveCurrentStreamState()
     } else {
       if (doneCallback) {
         stopTimer()
@@ -63,8 +66,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function setCurrentConv(id: string | null) {
+    saveCurrentStreamState()
     currentConvId.value = id
     contextCutoffId.value = null  // reset cutoff when switching conversations
+    applyStreamState(id)
   }
 
   function setMessages(msgs: storage.Message[]) {
@@ -77,6 +82,13 @@ export const useChatStore = defineStore('chat', () => {
 
   function setStreaming(v: boolean) {
     streaming.value = v
+    saveCurrentStreamState()
+  }
+
+  function stopStreamView() {
+    streamStopped.value = true
+    streaming.value = false
+    saveCurrentStreamState()
   }
 
   function appendStream(text: string) {
@@ -84,8 +96,23 @@ export const useChatStore = defineStore('chat', () => {
     startTimer()
   }
 
+  function appendStreamForConv(convID: string, text: string) {
+    if (convID === currentConvId.value) { appendStream(text); return }
+    const state = ensureStreamState(convID)
+    state.content += text
+    state.streaming = true
+  }
+
   function appendThinking(text: string) {
     streamThinking.value += text
+    saveCurrentStreamState()
+  }
+
+  function appendThinkingForConv(convID: string, text: string) {
+    if (convID === currentConvId.value) { appendThinking(text); return }
+    const state = ensureStreamState(convID)
+    state.thinking += text
+    state.streaming = true
   }
 
   function finishStream(cb: () => void) {
@@ -103,6 +130,51 @@ export const useChatStore = defineStore('chat', () => {
     doneCallback = null
     streamContent.value = ''
     streamThinking.value = ''
+    streamStopped.value = false
+    saveCurrentStreamState()
+  }
+
+  function resetStreamForConv(convID: string) {
+    if (convID === currentConvId.value) { resetStream(); return }
+    streamStates.value[convID] = { content: '', thinking: '', streaming: false, stopped: false }
+  }
+
+  function finishStreamForConv(convID: string, cb: () => void) {
+    if (convID === currentConvId.value) { finishStream(cb); return }
+    cb()
+  }
+
+  function setStreamingForConv(convID: string, v: boolean) {
+    if (convID === currentConvId.value) { setStreaming(v); return }
+    ensureStreamState(convID).streaming = v
+  }
+
+  function ensureStreamState(convID: string) {
+    if (!streamStates.value[convID]) {
+      streamStates.value[convID] = { content: '', thinking: '', streaming: false, stopped: false }
+    }
+    return streamStates.value[convID]
+  }
+
+  function saveCurrentStreamState() {
+    if (!currentConvId.value) return
+    streamStates.value[currentConvId.value] = {
+      content: streamContent.value,
+      thinking: streamThinking.value,
+      streaming: streaming.value,
+      stopped: streamStopped.value,
+    }
+  }
+
+  function applyStreamState(convID: string | null) {
+    stopTimer()
+    pendingQueue = ''
+    doneCallback = null
+    const state = convID ? streamStates.value[convID] : null
+    streamContent.value = state?.content || ''
+    streamThinking.value = state?.thinking || ''
+    streaming.value = state?.streaming || false
+    streamStopped.value = state?.stopped || false
   }
 
   const taskCutoffActive = ref(false)
@@ -129,10 +201,11 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   return {
-    conversations, currentConvId, messages, streaming, streamContent, streamThinking,
+    conversations, currentConvId, messages, streaming, streamContent, streamThinking, streamStopped,
     contextCutoffId, activeAgentId, providerMap, taskCutoffActive,
     setConversations, setCurrentConv, setMessages, appendMessage,
-    setStreaming, appendStream, appendThinking, finishStream, resetStream,
+    setStreaming, setStreamingForConv, stopStreamView, appendStream, appendStreamForConv,
+    appendThinking, appendThinkingForConv, finishStream, finishStreamForConv, resetStream, resetStreamForConv,
     toggleContextCutoff, toggleTaskContextCutoff, resetTaskCutoff, setActiveAgent, setProviderMap,
   }
 })
