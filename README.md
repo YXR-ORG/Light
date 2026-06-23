@@ -221,6 +221,14 @@ API Key 不会上传到任何服务器。
 
 ## Changelog
 
+### v1.6.0
+- **任务模式迁移至 eino adk**：从 deprecated 的 `flow/agent/react` 迁移到官方推荐的 `adk.ChatModelAgent`，事件模型统一为 `*AsyncIterator[*AgentEvent]`，代码更简洁（单事件循环替代双 goroutine）
+- **上下文压缩**：新增 reduction + summarization 双层压缩中间件，解决长任务 token 爆炸问题
+  - reduction：机械裁剪大工具输出到 `.light/`（零 LLM 成本）
+  - summarization：语义压缩长对话（消耗一次 LLM 调用）
+- **结束原因细分**：新增非 max steps / 非 loop 的异常分支兜底，提升任务中断时的总结覆盖
+- 文档同步：新增 eino API 使用原则、纯 Wails release workflow 示例
+
 ### v1.5.3
 - 优化 task 模式流式体验：用户在任务输出过程中向上滚动时，不再被强制拉回底部
 - 优化 task 模式等待态：首个正文输出前显示三点加载动画，替代单独黑色光标闪烁

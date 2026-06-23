@@ -501,6 +501,125 @@ func buildSystemPrompt(basePrompt string, skillIDs []string) string {
 }
 ```
 
+### 8.6 eino Agent API 选择：始终使用 `adk`，禁止使用 `flow/agent/react`
+
+> ⚠️ **重要**：这是项目级的编码约束，适用于所有需要构造 ReAct Agent 的场景（当前仅 task 模式使用 agent，问答/知识库用手写 tool loop）。
+
+**背景**：
+
+eino 框架有两套 ReAct Agent 构造方式：
+
+| API | 包路径 | 状态 | 中间件支持 |
+|-----|--------|------|-----------|
+| `react.NewAgent()` | `github.com/cloudwego/eino/flow/agent/react` | ⚠️ Deprecated | ❌ 不支持 |
+| `adk.NewChatModelAgent()` | `github.com/cloudwego/eino/adk` | ✅ 当前推荐 | ✅ `Handlers []ChatModelAgentMiddleware` |
+
+**原则**：
+
+```go
+// ✅ 正确：使用 adk
+import "github.com/cloudwego/eino/adk"
+
+agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
+    Name:         "MyAgent",
+    Instruction:  "You are a helpful assistant.",  // system prompt
+    Model:        llm,                               // model.ToolCallingChatModel
+    ToolsConfig:  adk.ToolsConfig{
+        ToolsNodeConfig: compose.ToolsNodeConfig{
+            Tools: tools,  // []tool.BaseTool
+        },
+    },
+    MaxIterations: 100,  // 替代旧版 MaxStep（默认 20）
+})
+
+// ❌ 禁止：旧版 API
+import "github.com/cloudwego/eino/flow/agent/react"
+agent, _ := react.NewAgent(ctx, &react.AgentConfig{...})
+```
+
+**API 映射速查**：
+
+| 旧版 (`react.AgentConfig`) | 新版 (`adk.ChatModelAgentConfig`) |
+|---------------------------|----------------------------------|
+| `ToolCallingModel` | `Model` |
+| `MessageModifier: react.NewPersonaModifier(prompt)` | `Instruction: prompt` |
+| `ToolsConfig: compose.ToolsNodeConfig{...}` | `ToolsConfig: adk.ToolsConfig{ToolsNodeConfig: ...}` |
+| `MaxStep: 100` | `MaxIterations: 100` |
+
+**启动 Agent（替代 `agent.Stream()`）**：
+
+```go
+// 方式一：直接 Run
+iter := agent.Run(ctx, &adk.AgentInput{
+    Messages:        msgs,     // []*schema.Message
+    EnableStreaming: true,     // 流式输出
+})
+
+// 方式二：通过 Runner（推荐，带 checkpoint 支持）
+runner := adk.NewRunner(ctx, adk.RunnerConfig{
+    Agent:           agent,
+    EnableStreaming: true,
+    CheckPointStore: store,  // 可选，支持中断/恢复
+})
+iter := runner.Run(ctx, msgs)
+```
+
+**消费事件流**（替代 `react.WithMessageFuture()` + callback）：
+
+```go
+for {
+    event, ok := iter.Next()
+    if !ok { break }
+    if event.Err != nil { /* 错误处理 */; break }
+
+    mv := event.Output.MessageOutput
+    switch mv.Role {
+    case schema.Assistant:
+        // model output — 可能是流（IsStreaming=true）或非流
+        if mv.IsStreaming {
+            for {
+                chunk, err := mv.MessageStream.Recv()
+                if err != nil { break }
+                // chunk.Content — 文本 delta
+                // chunk.ReasoningContent — 思考链 delta
+                // chunk.ToolCalls — tool_call delta
+            }
+        }
+        // mv.Message — 非流时的完整消息
+    case schema.Tool:
+        // tool result — mv.Message.Content 是工具输出
+        // mv.Message.ToolName / mv.Message.ToolCallID
+    }
+}
+```
+
+**挂载中间件**（如压缩中间件）：
+
+```go
+import (
+    "github.com/cloudwego/eino/adk/middlewares/reduction"
+    "github.com/cloudwego/eino/adk/middlewares/summarization"
+)
+
+reductionMW, _ := reduction.NewTyped(ctx, &reduction.TypedConfig[*schema.Message]{
+    Backend:          reduction.NewFileBackend(rootDir),
+    ReadFileToolName: "read_file",
+    MaxTokensForClear: 120000,
+})
+summarizationMW, _ := summarization.New(ctx, &summarization.Config{
+    Model:   llm,
+    Trigger: &summarization.TriggerCondition{ContextTokens: 120000},
+})
+
+agent, _ := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
+    // ...常规配置...
+    Handlers: []adk.ChatModelAgentMiddleware{  // ← 中间件链
+        reductionMW,      // 先裁剪大工具输出（零 LLM 成本）
+        summarizationMW,  // 再语义压缩长对话（消耗一次 LLM 调用）
+    },
+})
+```
+
 ---
 
 ## 九、MCP 工具协议
@@ -1084,6 +1203,166 @@ jobs:
 ```
 
 Windows 用 `runs-on: windows-latest`，打包用 `Compress-Archive`。
+
+#### 14.5.3 纯 Wails 项目（无模型）的完整 Release workflow
+
+不依赖 ONNX 模型等大文件的 Wails 项目（如笔记客户端），CI 更简单。以下是在 Light 项目中验证通过、**每次打 tag 必定触发**的完整配置。
+
+**关键经验：不要用 `dAppServer/wails-build-action`，手动安装 Wails CLI 更可控。**
+
+`.github/workflows/build.yml`：
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    name: Build macOS (universal)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Install frontend deps
+        run: npm install
+        working-directory: frontend
+
+      - name: Build macOS universal
+        run: wails build -tags fts5 -platform darwin/universal -ldflags "-X main.Version=${{ github.ref_name }}"
+
+      - name: Package
+        run: |
+          cd build/bin
+          ditto -c -k --sequesterRsrc --keepParent MyApp.app MyApp-mac-universal.zip
+          ls -lh MyApp-mac-universal.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-build
+          path: build/bin/MyApp-mac-universal.zip
+
+  build-windows:
+    name: Build Windows (amd64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Install frontend deps
+        run: npm install
+        working-directory: frontend
+
+      - name: Build Windows
+        run: wails build -tags fts5 -platform windows/amd64 -ldflags "-X main.Version=${{ github.ref_name }}"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          cd build/bin
+          Compress-Archive -Path MyApp.exe -DestinationPath MyApp-windows-amd64.zip
+          (Get-Item MyApp-windows-amd64.zip).Length / 1MB
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: build/bin/MyApp-windows-amd64.zip
+
+  release:
+    name: Create Release
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download mac artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-build
+
+      - name: Download windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MyApp ${{ github.ref_name }}
+          body: |
+            ## MyApp ${{ github.ref_name }}
+
+            ### 下载
+
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | macOS (Apple Silicon + Intel) | `MyApp-mac-universal.zip` | 解压后拖入 Applications |
+            | Windows 64位 | `MyApp-windows-amd64.zip` | 解压后运行 MyApp.exe |
+
+            > Windows 版需要 [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)（Windows 11 已内置）
+          files: |
+            MyApp-mac-universal.zip
+            MyApp-windows-amd64.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
+```
+
+**触发方式**：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+**常见问题**：
+
+| 问题 | 原因 | 解法 |
+|------|------|------|
+| 打了 tag 但 Actions 没触发 | workflow 文件未提交到 master，或 tag 格式不匹配 `v*` | 确保 `git push origin master` 在打 tag 之前；tag 必须以 `v` 开头 |
+| 修复 workflow 后旧 tag 不重跑 | GitHub Actions 按 tag 创建时的 workflow 文件版本执行 | 新打 patch tag（如 `v0.1.1`），不要 `git tag -f` |
+| macOS 构建产物是 `.app` 目录 | `wails build` 生成 `MyApp.app`，不能直接上传 | 用 `ditto` 打包为 zip |
+| Windows 构建产物是 `.exe` | 直接 `Compress-Archive` 即可 | 无需特殊处理 |
+| Release 里没有文件 | `release` job 的 `files` 路径与 `download-artifact` 下载的文件名不一致 | 先 `ls` 确认下载后的文件名，再对齐 `files` 字段 |
+| `permissions: contents: write` 缺失 | release job 默认无写权限 | 必须在 workflow 顶层加 `permissions: contents: write` |
+| `wails-build-action` 构建失败 | 该 action 版本可能未跟进 Wails 最新版 | 改用手动安装 Wails CLI（`go install`），更可控 |
+
+**与含模型项目的差异**：
+
+- 不需要 `actions/cache` 和模型下载步骤
+- 不需要构建后复制模型到 app bundle
+- macOS 打包用 `ditto`，Windows 用 `Compress-Archive`
+- 构建命令必须带 `-tags fts5`（如果项目用了 SQLite FTS5）
 
 ---
 

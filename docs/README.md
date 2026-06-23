@@ -9,13 +9,14 @@
 | 你要做什么 | 先看 | 说明 |
 |------------|------|------|
 | 了解当前产品和架构 | [`SPECS.md`](SPECS.md) | 当前权威规格：三种对话模式、数据库实体关系、核心约束 |
-| 开发另一个 Wails 桌面软件 | [`WAILS_DEV_GUIDE.md`](WAILS_DEV_GUIDE.md) | 跨项目开发手册：Wails、图标、打包、CI、常见坑 |
+| 开发另一个 Wails 桌面软件 | [`WAILS_DEV_GUIDE.md`](WAILS_DEV_GUIDE.md) | 跨项目开发手册：Wails、图标、打包、CI、常见坑，含 eino adk 迁移原则 |
 | 维护知识库功能 | [`KNOWLEDGE_BASE_IMPL.md`](KNOWLEDGE_BASE_IMPL.md) | 知识库实现：SQLite、FTS5、向量、RRF、摘要层 |
 | 排查知识库历史问题 | [`KNOWLEDGE_BASE_POSTMORTEM.md`](KNOWLEDGE_BASE_POSTMORTEM.md) | 知识库问题复盘与根因记录 |
 | 看任务模式设计 | [`superpowers/specs/2026-06-03-task-mode-design.md`](superpowers/specs/2026-06-03-task-mode-design.md) | task 模式功能边界、工具集、安全执行 |
-| 看 task ReAct 架构 | [`superpowers/specs/2026-06-04-task-react-architecture.md`](superpowers/specs/2026-06-04-task-react-architecture.md) | eino ReAct Agent、流式事件、与 chat/knowledge 的区别 |
 | 看 task 产物机制 | [`superpowers/specs/2026-06-04-task-artifact-mechanism.md`](superpowers/specs/2026-06-04-task-artifact-mechanism.md) | Artifact、plan/file 分桶、历史恢复、自适应执行 |
+| 看会话压缩 | [`superpowers/specs/2026-06-22-session-compression.md`](superpowers/specs/2026-06-22-session-compression.md) | ⭐ **当前最新**：上下文压缩 + eino adk API 迁移完整方案 |
 | 看待办和未来规划 | [`TODO.md`](TODO.md) | 已完成、暂缓和未来规划；不是架构权威来源 |
+| ~~看 task ReAct 架构~~ | [~~旧版文档~~](superpowers/specs/2026-06-04-task-react-architecture.md) | ⚠️ 已过时（基于 `flow/agent/react`，已被 `adk.ChatModelAgent` 替代），保留供历史参考
 
 ---
 
@@ -52,9 +53,24 @@ Light 有三种执行机制不同的模式：
 |------|------|----------|
 | `chat` | 手写 tool loop | [`SPECS.md`](SPECS.md) |
 | `knowledge` | 手写 tool loop + `search_knowledge` | [`KNOWLEDGE_BASE_IMPL.md`](KNOWLEDGE_BASE_IMPL.md) |
-| `task` | eino ReAct Agent | [`task ReAct 架构`](superpowers/specs/2026-06-04-task-react-architecture.md) |
+| `task` | eino `adk.ChatModelAgent` | [`会话压缩 spec`](superpowers/specs/2026-06-22-session-compression.md) |
 
-不要把 task 模式和 chat/knowledge 的工具循环混为一谈。task 由 eino ReAct Agent 管理 tool call、observation 回灌和执行步数。
+不要把 task 模式和 chat/knowledge 的工具循环混为一谈。task 由 eino adk agent 管理 tool call、observation 回灌和执行步数。
+
+### ⚠️ eino API 使用原则
+
+**项目从 `flow/agent/react` 迁移到 `adk.ChatModelAgent`**。原因：
+1. `flow/agent/react` 已被 eino 官方标记为 **Deprecated**
+2. `adk.ChatModelAgent` 支持中间件（`Handlers []ChatModelAgentMiddleware`），可以挂载 reduction/summarization 压缩中间件
+3. 事件模型从"callback + MessageFuture"改为统一的 `*AsyncIterator[*AgentEvent]`
+
+**编码原则**：
+- 新代码**只使用 `github.com/cloudwego/eino/adk` 下的 API**
+- 禁止 import `github.com/cloudwego/eino/flow/agent/react`
+- 中间件从 `github.com/cloudwego/eino/adk/middlewares/*` 引用
+- 任务模式 agent 使用 `adk.NewChatModelAgent()`，不使用 `react.NewAgent()`
+
+详见 [`WAILS_DEV_GUIDE.md`](WAILS_DEV_GUIDE.md) 第八章 "eino 集成" 和 [`会话压缩 spec`](superpowers/specs/2026-06-22-session-compression.md)。
 
 ### 数据存储
 

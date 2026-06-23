@@ -1,9 +1,12 @@
-# Task 模式 — ReAct 架构详解
+# Task 模式 — ReAct 架构详解（⚠️ 已过时）
 
 > 版本：v1.0
 > 日期：2026-06-04
-> 状态：已实现（对应 v1.3.18+）
-> 关联：`2026-06-03-task-mode-design.md`（功能设计）、本文档（机制/架构）
+> 状态：⚠️ **已过时** — 本文基于 `flow/agent/react` API，已被 `adk.ChatModelAgent` 替代
+> 替代文档：**[2026-06-22-session-compression.md](2026-06-22-session-compression.md)**
+> 关联：`2026-06-03-task-mode-design.md`（功能设计）
+>
+> **本文仅保留供历史参考，不要基于本文档写新代码。**
 
 ---
 

@@ -2,22 +2,17 @@ package eino
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/cloudwego/eino/callbacks"
+	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
-	"github.com/cloudwego/eino/flow/agent"
-	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
-	ub "github.com/cloudwego/eino/utils/callbacks"
 )
 
 // TaskStep 是 task 模式推理链中的一个步骤，对应前端 task:step event。
@@ -135,7 +130,7 @@ func appendTaskPlanInstruction(msg *schema.Message) {
 	msg.Content += instruction
 }
 
-// RunTaskAgent 启动 eino ReAct Agent，返回 TaskStep channel（缓冲 64）。
+// RunTaskAgent 启动 eino adk ChatModelAgent（ReAct），返回 TaskStep channel（缓冲 512）。
 // ctx cancel → agent 停止，channel close。
 // tools 必须全部实现 tool.BaseTool（InvokableTool）。
 // bashTool 引用用于 Confirm 回调注入。
@@ -179,87 +174,28 @@ func RunTaskAgent(
 		bashTool.emitter = emitter
 	}
 
-	// 构建 MessageModifier：注入 system prompt
+	// System prompt 作为 agent Instruction（替代旧版 react.NewPersonaModifier）
 	sysPrompt := taskSystemPrompt(workDir, planEnabled)
-	modifier := react.NewPersonaModifier(sysPrompt)
 
-	// 构建 Callback：监听 model stream → 推送 thinking/content steps
-	//                监听 tool start/end → 推送 tool_call/tool_result steps
-	modelHandler := &ub.ModelCallbackHandler{
-		OnEnd: func(ctx context.Context, info *callbacks.RunInfo, output *model.CallbackOutput) context.Context {
-			if output != nil && output.Message != nil {
-				tcCount := len(output.Message.ToolCalls)
-				contentLen := len(output.Message.Content)
-				reasonLen := len(output.Message.ReasoningContent)
-				slog.Info("TaskAgent model round end", "tool_calls", tcCount, "content_len", contentLen, "reasoning_len", reasonLen)
-			}
-			return ctx
-		},
-	}
-	toolHandler := &ub.ToolCallbackHandler{
-		OnStart: func(ctx context.Context, info *callbacks.RunInfo, input *tool.CallbackInput) context.Context {
-			args := ""
-			if input != nil {
-				args = input.ArgumentsInJSON
-			}
-			name := ""
-			if info != nil {
-				name = info.Name
-			}
-			slog.Info("TaskAgent tool_call", "tool", name, "args_len", len(args))
-			ch <- TaskStep{Type: "tool_call", ToolName: name, ToolArgs: args}
-
-			// 死循环检测：同一工具+参数连续重复
-			sig := name + "|" + args
-			loopMu.Lock()
-			if sig == lastSig {
-				repeatCount++
-			} else {
-				lastSig = sig
-				repeatCount = 1
-			}
-			triggered := repeatCount >= loopDetectThreshold && !loopDetected
-			if triggered {
-				loopDetected = true
-			}
-			loopMu.Unlock()
-
-			if triggered {
-				slog.Warn("TaskAgent loop detected, cancelling", "tool", name, "repeat", repeatCount)
-				runCancel()
-			}
-			return ctx
-		},
-		OnEnd: func(ctx context.Context, info *callbacks.RunInfo, output *tool.CallbackOutput) context.Context {
-			result := ""
-			name := ""
-			if output != nil {
-				result = output.Response
-			}
-			if info != nil {
-				name = info.Name
-			}
-			slog.Info("TaskAgent tool_result", "tool", name, "result_len", len(result))
-			ch <- TaskStep{Type: "tool_result", ToolName: name, ToolResult: result}
-			return ctx
-		},
+	// 构造压缩中间件链（reduction + summarization）
+	// 两层防线：先机械裁剪大工具输出（零 LLM 成本），再 LLM 语义压缩长对话
+	compressionHandlers := BuildCompressionMiddlewares(runCtx, llm, workDir)
+	if len(compressionHandlers) > 0 {
+		slog.Info("TaskAgent: compression middleware enabled", "count", len(compressionHandlers), "workDir", workDir)
 	}
 
-	cb := react.BuildAgentCallback(modelHandler, toolHandler)
-
-	// 创建 ReAct agent。MaxStep=100 仅为天花板（模型输出无 tool_call 即自然终止），
-	// 不强制跑满。配合死循环检测提前止损，避免弱模型浪费配额跑满 100 步。
-	agentInst, err := react.NewAgent(runCtx, &react.AgentConfig{
-		ToolCallingModel: llm,
-		ToolsConfig: compose.ToolsNodeConfig{
-			Tools: tools,
-		},
-		MessageModifier: modifier,
-		MaxStep:         100,
+	// 创建 adk ChatModelAgent（ReAct）
+	agent, err := adk.NewChatModelAgent(runCtx, &adk.ChatModelAgentConfig{
+		Name:          "LightTaskAgent",
+		Instruction:   sysPrompt,
+		Model:         llm,
+		ToolsConfig:   adk.ToolsConfig{ToolsNodeConfig: compose.ToolsNodeConfig{Tools: tools}},
+		MaxIterations: 100,
+		Handlers:      compressionHandlers, // 压缩中间件（可能为 nil，表示降级不压缩）
 	})
 	if err != nil {
 		runCancel()
-		return nil, fmt.Errorf("task agent: 创建 ReAct agent 失败: %w", err)
+		return nil, fmt.Errorf("task agent: 创建 ChatModelAgent 失败: %w", err)
 	}
 
 	// 构建消息列表
@@ -286,101 +222,118 @@ func RunTaskAgent(
 			}
 		}()
 
-		// 使用 WithMessageFuture 获取每轮 LLM 的流式输出。
-		// 该消息流同时包含 assistant 消息（含 tool_call）与 tool 执行结果，
-		// 我们顺序收集为 collectedMsgs，供撞限后的“补总结轮”复用上下文。
-		futureOpt, future := react.WithMessageFuture()
+		// 启动 agent（返回事件迭代器）
+		iter := agent.Run(runCtx, &adk.AgentInput{
+			Messages:        msgs,
+			EnableStreaming: true,
+		})
 
-		// 启动 agent stream
-		outputStream, err := agentInst.Stream(runCtx, msgs,
-			agent.WithComposeOptions(compose.WithCallbacks(cb)),
-			futureOpt,
-		)
-		if err != nil {
-			slog.Error("TaskAgent stream error", "error", err)
-			ch <- TaskStep{Type: "error", Error: err.Error()}
-			return
-		}
-
-		// hasFinalContent：是否已产出“最终答案”（不含 tool_call 轮次的 content）
+		// hasFinalContent：是否已产出"最终答案"（不含 tool_call 轮次的 content）
 		var hasFinalContent bool
 		// collectedMsgs：累积的完整对话消息（assistant + tool），用于补总结轮
 		var collectedMsgs []*schema.Message
 		var collectMu sync.Mutex
 
-		// 并发：goroutine 1 — 从 iterator 读每轮 LLM 输出
-		// 关键：一轮 LLM 输出可能同时含 content 和 tool_call。
-		//   - 含 tool_call 的轮次 → content 是“过程旁白/工具复述”，归入折叠链（content_note）
-		//   - 不含 tool_call 的轮次（通常是最后一轮）→ content 才是“最终答案”，归入正文（content）
-		iterDone := make(chan struct{})
-		go func() {
-			defer close(iterDone)
-			streams := future.GetMessageStreams()
-			for {
-				sr, ok, err := streams.Next()
-				if err != nil || !ok {
-					break
-				}
+		// 单事件循环：逐轮处理模型输出（Assistant）和工具结果（Tool）
+		var finalErr error
+		for {
+			event, ok := iter.Next()
+			if !ok {
+				break
+			}
+
+			// 错误事件
+			if event.Err != nil {
+				finalErr = event.Err
+				slog.Error("TaskAgent event error", "error", event.Err)
+				break
+			}
+
+			if event.Output == nil || event.Output.MessageOutput == nil {
+				continue
+			}
+
+			mv := event.Output.MessageOutput
+
+			switch mv.Role {
+			case schema.Assistant:
+				// —— Model output（一轮 LLM 输出）——
 				var roundContent strings.Builder
 				hasToolCall := false
-				isToolMsg := false
-				contentStreamed := false // 本轮是否已实时推送过 content delta
+				contentStreamed := false
 				var toolCalls []schema.ToolCall
-				var toolMsgID, toolName string
-				for {
-					msg, err := sr.Recv()
-					if err != nil {
-						break
-					}
-					if msg == nil {
-						continue
-					}
-					if len(msg.ToolCalls) > 0 {
-						hasToolCall = true
-						toolCalls = append(toolCalls, msg.ToolCalls...)
-					}
-					// tool 结果消息（WithMessageFuture 会把 tool result 也发进流）。
-					// 其 Content 是工具执行结果，绝不能进正文——它已通过 ToolCallbackHandler
-					// 以 tool_result step 展示在折叠链。这里仅记录用于补总结轮的上下文。
-					if msg.Role == schema.Tool {
-						isToolMsg = true
-						toolMsgID = msg.ToolCallID
-						toolName = msg.ToolName
-						if msg.Content != "" {
-							roundContent.WriteString(msg.Content)
+
+				slog.Info("TaskAgent model round start")
+
+				if mv.IsStreaming && mv.MessageStream != nil {
+					for {
+						chunk, err := mv.MessageStream.Recv()
+						if err != nil {
+							break
 						}
-						continue
+						if chunk == nil {
+							continue
+						}
+						if len(chunk.ToolCalls) > 0 {
+							hasToolCall = true
+							toolCalls = append(toolCalls, chunk.ToolCalls...)
+						}
+						if chunk.ReasoningContent != "" {
+							ch <- TaskStep{Type: "thinking", Content: chunk.ReasoningContent}
+						}
+						if chunk.Content != "" {
+							roundContent.WriteString(chunk.Content)
+							contentStreamed = true
+							ch <- TaskStep{Type: "content", Content: sanitizeContent(chunk.Content)}
+						}
 					}
-					if msg.ReasoningContent != "" {
-						ch <- TaskStep{Type: "thinking", Content: msg.ReasoningContent}
+					// 流式 stream 消费完后无需单独 Close（框架负责）
+				} else if mv.Message != nil {
+					// 非流式输出（兜底）
+					roundContent.WriteString(mv.Message.Content)
+					if mv.Message.ReasoningContent != "" {
+						ch <- TaskStep{Type: "thinking", Content: mv.Message.ReasoningContent}
 					}
-					// assistant content：实时流式推送（逐 chunk）。
-					// 本轮结束后若发现 hasToolCall，再发 content_rollback 把这些 delta
-					// 从正文移入折叠链（说明是“过程旁白”而非最终答案）。
-					if msg.Content != "" {
-						roundContent.WriteString(msg.Content)
+					if len(mv.Message.ToolCalls) > 0 {
+						hasToolCall = true
+						toolCalls = mv.Message.ToolCalls
+					}
+					if mv.Message.Content != "" {
 						contentStreamed = true
-						ch <- TaskStep{Type: "content", Content: sanitizeContent(msg.Content)}
+						ch <- TaskStep{Type: "content", Content: sanitizeContent(mv.Message.Content)}
 					}
 				}
-				sr.Close()
 
 				text := sanitizeContent(roundContent.String())
+				tcCount := len(toolCalls)
+				slog.Info("TaskAgent model round end", "tool_calls", tcCount, "content_len", len(text), "reasoning_len", "...")
 
-				// 收集消息用于补总结轮：区分 assistant 与 tool
-				collectMu.Lock()
-				if isToolMsg {
-					// tool 结果消息：仅入收集列表，不进正文/旁白
-					collectedMsgs = append(collectedMsgs, &schema.Message{
-						Role:       schema.Tool,
-						Content:    text,
-						ToolCallID: toolMsgID,
-						ToolName:   toolName,
-					})
-					collectMu.Unlock()
-					continue
+				// —— 发送 tool_call steps + 死循环检测 ——
+				for _, tc := range toolCalls {
+					ch <- TaskStep{Type: "tool_call", ToolName: tc.Function.Name, ToolArgs: tc.Function.Arguments}
+
+					sig := tc.Function.Name + "|" + tc.Function.Arguments
+					loopMu.Lock()
+					if sig == lastSig {
+						repeatCount++
+					} else {
+						lastSig = sig
+						repeatCount = 1
+					}
+					triggered := repeatCount >= loopDetectThreshold && !loopDetected
+					if triggered {
+						loopDetected = true
+					}
+					loopMu.Unlock()
+
+					if triggered {
+						slog.Warn("TaskAgent loop detected, cancelling", "tool", tc.Function.Name, "repeat", repeatCount)
+						runCancel()
+					}
 				}
-				// assistant 消息（可能含 tool_call）
+
+				// —— 收集 assistant 消息用于补总结轮 ——
+				collectMu.Lock()
 				collectedMsgs = append(collectedMsgs, &schema.Message{
 					Role:      schema.Assistant,
 					Content:   text,
@@ -391,37 +344,41 @@ func RunTaskAgent(
 				}
 				collectMu.Unlock()
 
-				// 本轮结束：短 content + tool_call 通常是过程旁白，回滚到折叠链；
-				// 长 content 更可能是模型把最终正文和 update_plan 等工具调用放在同一轮，保留正文避免整段重播。
+				// —— content_rollback：短 content + tool_call = 旁白 ——
 				if contentStreamed && shouldRollbackTaskContent(text, hasToolCall) {
 					slog.Info("TaskAgent content_rollback (旁白)", "len", len(text))
 					ch <- TaskStep{Type: "content_rollback", Content: text}
 				}
-			}
-		}()
 
-		// goroutine 2（主流程）— 消费 output stream，推进 agent 执行。
-		// 关键：记录真实结束原因。io.EOF = agent 正常结束（模型已给最终答案）；
-		// 其他 error（exceeds max steps / context canceled）= 异常结束，才需补总结轮。
-		var finalErr error
-		for {
-			_, err := outputStream.Recv()
-			if err != nil {
-				finalErr = err
-				break
+			case schema.Tool:
+				// —— Tool result ——
+				name := mv.ToolName
+				result := ""
+				toolMsgID := ""
+				if mv.Message != nil {
+					result = mv.Message.Content
+					toolMsgID = mv.Message.ToolCallID
+				}
+				slog.Info("TaskAgent tool_result", "tool", name, "result_len", len(result))
+				ch <- TaskStep{Type: "tool_result", ToolName: name, ToolResult: result}
+
+				// 收集 tool 结果消息用于补总结轮
+				collectMu.Lock()
+				collectedMsgs = append(collectedMsgs, &schema.Message{
+					Role:       schema.Tool,
+					Content:    result,
+					ToolCallID: toolMsgID,
+					ToolName:   name,
+				})
+				collectMu.Unlock()
 			}
 		}
-		outputStream.Close()
 
-		// 等 iterator goroutine 完成
-		<-iterDone
-
-		// 判断 agent 是否正常结束（EOF 视为正常）
-		normalEnd := finalErr == nil || errors.Is(finalErr, io.EOF)
-		isMaxSteps := finalErr != nil && strings.Contains(finalErr.Error(), "exceeds max steps")
+		// —— Agent 结束，判断结束原因 ——
+		normalEnd := finalErr == nil
+		isMaxSteps := finalErr != nil && strings.Contains(finalErr.Error(), "exceeds max iterations")
 		slog.Info("TaskAgent run ended", "normal", normalEnd, "max_steps", isMaxSteps, "err", finalErr)
 
-		// 判断结束原因
 		collectMu.Lock()
 		produced := hasFinalContent
 		msgsForSummary := make([]*schema.Message, len(collectedMsgs))
@@ -438,7 +395,7 @@ func RunTaskAgent(
 			return
 		}
 
-		// 情况 2：agent 正常结束但未产出正文（流式时序导致 future 未推出最终答案）
+		// 情况 2：agent 正常结束但未产出正文（流式时序可能导致最终答案未正确收集）
 		// → 静默补总结，不发"撞限"提示（因为并非异常）
 		if normalEnd && !wasLoop {
 			summary := runSummaryRound(ctx, llm, sysPrompt, userMsg, msgsForSummary, ch)
@@ -449,12 +406,18 @@ func RunTaskAgent(
 			return
 		}
 
-		// 情况 3：异常结束（撞 MaxStep / 死循环）→ 补总结 + 提示用户
+		// 情况 3：异常结束（撞 MaxStep / 死循环 / 其他错误）→ 补总结 + 提示用户
 		var notice string
 		if wasLoop {
 			notice = "⚠️ 检测到重复操作，已自动停止。以下是基于已收集信息的总结："
-		} else {
+		} else if isMaxSteps {
 			notice = "⚠️ 任务较复杂，已达执行步数上限。以下是基于已收集信息的总结："
+		} else if finalErr != nil {
+			// 其他错误（如 context canceled 但非 loop 触发）
+			slog.Info("TaskAgent: non-loop error, attempting summary", "err", finalErr)
+			notice = "⚠️ 任务执行中断。以下是基于已收集信息的总结："
+		} else {
+			notice = "⚠️ 任务未能完成。以下是基于已收集信息的总结："
 		}
 
 		summary := runSummaryRound(ctx, llm, sysPrompt, userMsg, msgsForSummary, ch)
@@ -469,7 +432,7 @@ func RunTaskAgent(
 	return ch, nil
 }
 
-// runSummaryRound 在 agent 撞限/死循环后，用累积上下文发起一次“禁用工具”的总结请求，
+// runSummaryRound 在 agent 撞限/死循环后，用累积上下文发起一次"禁用工具"的总结请求，
 // 让模型基于已收集信息直接产出最终答案。结果以 content step 流式推送。
 // 返回是否成功产出非空总结。
 func runSummaryRound(

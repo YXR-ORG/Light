@@ -4,3 +4,6 @@ frontend/dist
 
 # Embedding 模型文件（大文件，不进 git，需手动放置或由 CI 下载）
 build/models/**/*.onnx
+
+# 任务模式上下文压缩产物（reduction 卸载文件 + summarization 对话原文）
+.light/
