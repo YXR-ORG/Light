@@ -25,9 +25,12 @@ import (
 //   - Web search（若已配置 API key）
 //   - BashTool（workDir 限定）
 //   - FileTool x4（workDir 限定）
+//   - FinishGoalTool（仅 goal 模式）
 //
+// goal 非空时启用 goal 模式：BashTool autoApprove=true（跳过普通危险命令确认）。
+// 返回 FinishGoalTool 引用供 react_agent 检测（goal 模式才有，否则 nil）。
 // 任何单个资源加载失败只记 warn 日志，不中断整体。
-func BuildTaskTools(ctx context.Context, workDir string, emitter BashStepEmitter, planEnabled bool) []tool.BaseTool {
+func BuildTaskTools(ctx context.Context, workDir string, emitter BashStepEmitter, planEnabled bool, goal string) ([]tool.BaseTool, *FinishGoalTool) {
 	var tools []tool.BaseTool
 
 	// 0. Plan 工具（仅在全局开关开启时）
@@ -70,16 +73,24 @@ func BuildTaskTools(ctx context.Context, workDir string, emitter BashStepEmitter
 		tools = append(tools, wsTool)
 	}
 
-	// 5. BashTool
+	// 5. BashTool（goal 模式 autoApprove=true）
 	blacklist := storage.GetSettingWithDefault("task_bash_blacklist", "")
-	tools = append(tools, NewBashTool(workDir, blacklist, emitter))
+	autoApprove := goal != ""
+	tools = append(tools, NewBashTool(workDir, blacklist, emitter, autoApprove))
 
 	// 6. FileTool x4
 	tools = append(tools, NewFileTools(workDir)...)
 
+	// 7. FinishGoalTool（仅 goal 模式）
+	var finishGoalTool *FinishGoalTool
+	if goal != "" {
+		finishGoalTool = NewFinishGoalTool()
+		tools = append(tools, finishGoalTool)
+	}
+
 	slog.Info("BuildTaskTools", "total", len(tools),
-		"mcp_skills_kbs", len(tools)-5)
-	return tools
+		"mcp_skills_kbs", len(tools)-5, "goal_mode", goal != "")
+	return tools, finishGoalTool
 }
 
 // loadAllMCPTools 连接所有已启用 MCP server，返回其工具。

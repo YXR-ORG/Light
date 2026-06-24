@@ -22,6 +22,7 @@ type Conversation struct {
 	WorkDir         string    `gorm:"type:text;default:''" json:"work_dir"`          // task 模式工作目录
 	ParentConvID    string    `gorm:"size:36;default:''" json:"parent_conv_id"`      // 分叉来源会话 ID（空=原始会话）
 	ForkFromMsgID   string    `gorm:"size:36;default:''" json:"fork_from_msg_id"`    // 分叉来源消息 ID
+	Goal            string    `gorm:"type:text;default:''" json:"goal"`              // task 模式目标（goal 模式，空=普通 task）
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }

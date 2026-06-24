@@ -32,6 +32,29 @@ wget * | bash
 chmod 777 /
 :(){ :|:& };:`
 
+// criticalBashPatterns 是"极危险"命令模式，即使 goal 模式 autoApprove 下也必须确认。
+// 这些命令可导致数据不可恢复或系统级破坏。
+var criticalBashPatterns = []string{
+	"rm -rf /",
+	"rm -rf ~",
+	"sudo",
+	"mkfs",
+	"dd if=",
+	"chmod 777 /",
+	":(){ :|:& };:",
+}
+
+// isCritical 检查命令是否命中极危险模式（子串匹配，大小写不敏感）。
+func isCritical(cmd string) bool {
+	lower := strings.ToLower(strings.TrimSpace(cmd))
+	for _, p := range criticalBashPatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // BashConfirmRequest 由 BashTool 发出，等待前端确认。
 type BashConfirmRequest struct {
 	ID  string // 唯一标识，前端用 ConfirmBash(id, approved) 回复
@@ -43,10 +66,12 @@ type BashStepEmitter func(stepType, content, cmd, confirmID string)
 
 // BashTool 实现 eino InvokableTool，在工作目录执行 shell 命令。
 // 黑名单命令先向前端发送 bash_confirm 事件，阻塞等待用户确认后才执行。
+// autoApprove=true（goal 模式）时跳过普通危险命令确认，仅极危险命令仍需确认。
 type BashTool struct {
 	workDir     string
 	emitter     BashStepEmitter
 	blacklist   []string // glob 模式列表
+	autoApprove bool     // goal 模式：跳过普通危险命令确认，仅极危险命令确认
 	confirmsMu  sync.Mutex
 	confirms    map[string]chan bool // confirmID → answer channel
 }
@@ -54,16 +79,18 @@ type BashTool struct {
 // NewBashTool 创建 BashTool。
 // blacklistRules: 换行分隔的 glob 模式，若为空则使用默认内置规则。
 // emitter: 推送 task:step 事件的回调。
-func NewBashTool(workDir, blacklistRules string, emitter BashStepEmitter) *BashTool {
+// autoApprove: goal 模式下为 true，跳过普通危险命令确认。
+func NewBashTool(workDir, blacklistRules string, emitter BashStepEmitter, autoApprove bool) *BashTool {
 	if blacklistRules == "" {
 		blacklistRules = defaultBashBlacklist
 	}
 	rules := parseBlacklist(blacklistRules)
 	return &BashTool{
-		workDir:   workDir,
-		emitter:   emitter,
-		blacklist:  rules,
-		confirms:   make(map[string]chan bool),
+		workDir:     workDir,
+		emitter:     emitter,
+		blacklist:   rules,
+		autoApprove: autoApprove,
+		confirms:    make(map[string]chan bool),
 	}
 }
 
@@ -143,8 +170,16 @@ func (t *BashTool) InvokableRun(ctx context.Context, argsJSON string, _ ...tool.
 		timeout = 30 * time.Second
 	}
 
-	// 黑名单检查 → 需要用户确认
-	if t.isDangerous(args.Cmd) {
+	// 危险命令检查 → 需要用户确认
+	// goal 模式（autoApprove=true）：仅极危险命令需确认，普通危险命令自动放行
+	needConfirm := false
+	if t.autoApprove {
+		needConfirm = isCritical(args.Cmd)
+	} else {
+		needConfirm = t.isDangerous(args.Cmd)
+	}
+
+	if needConfirm {
 		confirmID := uuid.New().String()
 		ch := make(chan bool, 1)
 

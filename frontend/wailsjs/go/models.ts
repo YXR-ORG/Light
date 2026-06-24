@@ -98,6 +98,7 @@ export namespace handler {
 	    regenerate_group_id: string;
 	    ignore_context: boolean;
 	    attachments: Attachment[];
+	    goal: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new StreamTaskRequest(source);
@@ -114,6 +115,7 @@ export namespace handler {
 	        this.regenerate_group_id = source["regenerate_group_id"];
 	        this.ignore_context = source["ignore_context"];
 	        this.attachments = this.convertValues(source["attachments"], Attachment);
+	        this.goal = source["goal"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -224,6 +226,7 @@ export namespace storage {
 	    work_dir: string;
 	    parent_conv_id: string;
 	    fork_from_msg_id: string;
+	    goal: string;
 	    // Go type: time
 	    created_at: any;
 	    // Go type: time
@@ -248,6 +251,7 @@ export namespace storage {
 	        this.work_dir = source["work_dir"];
 	        this.parent_conv_id = source["parent_conv_id"];
 	        this.fork_from_msg_id = source["fork_from_msg_id"];
+	        this.goal = source["goal"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	    }

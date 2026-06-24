@@ -2,17 +2,19 @@
 /**
  * BashConfirmDialog — 全局单例危险命令确认框
  *
- * 用法：在 App.vue 放一个 <BashConfirmDialog />，监听 task:bash_confirm 事件，
+ * 用法：在 App.vue 放一个 <BashConfirmDialog />，监听 task:step 事件中 type=bash_confirm 的步骤，
  * 用户选择后调用后端 TaskHandler.ConfirmBash。
  */
 import { ref, onMounted, onUnmounted } from 'vue'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { ConfirmBash } from '../../wailsjs/go/handler/TaskHandler'
 
-interface BashConfirmPayload {
+interface TaskStepPayload {
   conv_id: string
-  confirm_id: string
+  type: string
+  content: string
   cmd: string
+  confirm_id: string
 }
 
 const visible = ref(false)
@@ -21,7 +23,8 @@ const confirmId = ref('')
 const cmd = ref('')
 const loading = ref(false)
 
-function onEvent(payload: BashConfirmPayload) {
+function onEvent(payload: TaskStepPayload) {
+  if (payload.type !== 'bash_confirm') return
   convId.value = payload.conv_id
   confirmId.value = payload.confirm_id
   cmd.value = payload.cmd
@@ -42,8 +45,8 @@ async function choose(approved: boolean) {
   }
 }
 
-onMounted(() => EventsOn('task:bash_confirm', onEvent))
-onUnmounted(() => EventsOff('task:bash_confirm'))
+onMounted(() => EventsOn('task:step', onEvent))
+onUnmounted(() => EventsOff('task:step'))
 </script>
 
 <template>

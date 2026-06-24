@@ -210,6 +210,12 @@ func UpdateConversationWorkDir(id, workDir string) error {
 		UpdateColumn("work_dir", workDir).Error
 }
 
+// UpdateConversationGoal 更新 task 模式目标，不影响 updated_at。
+func UpdateConversationGoal(id, goal string) error {
+	return DB.Model(&Conversation{}).Where("id = ?", id).
+		UpdateColumn("goal", goal).Error
+}
+
 // SaveTaskMessageWithAttachments 保存 task 模式用户消息，附带附件 meta JSON。
 func SaveTaskMessageWithAttachments(convID, role, content, attachments string) (*Message, error) {
 	id := NewID()
@@ -331,6 +337,7 @@ func ForkConversation(srcConvID, forkFromMsgID string) (*Conversation, error) {
 		KnowledgeBaseID: src.KnowledgeBaseID,
 		ParentConvID:    srcConvID,
 		ForkFromMsgID:   forkFromMsgID,
+		Goal:            src.Goal,
 	}
 
 	// 单事务：创建会话 + 复制消息

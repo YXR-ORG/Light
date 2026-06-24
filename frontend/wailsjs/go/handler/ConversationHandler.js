@@ -42,6 +42,10 @@ export function SetAgent(arg1, arg2) {
   return window['go']['handler']['ConversationHandler']['SetAgent'](arg1, arg2);
 }
 
+export function SetGoal(arg1, arg2) {
+  return window['go']['handler']['ConversationHandler']['SetGoal'](arg1, arg2);
+}
+
 export function SetMode(arg1, arg2, arg3) {
   return window['go']['handler']['ConversationHandler']['SetMode'](arg1, arg2, arg3);
 }

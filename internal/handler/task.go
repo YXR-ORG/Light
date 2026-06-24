@@ -61,6 +61,7 @@ type StreamTaskRequest struct {
 	RegenerateGroupID string       `json:"regenerate_group_id"`
 	IgnoreContext     bool         `json:"ignore_context"`
 	Attachments       []Attachment `json:"attachments"`
+	Goal              string       `json:"goal"` // task 模式目标（非空=goal 模式）
 }
 
 // StreamTask 启动 task 模式 ReAct Agent，通过 task:step events 推送推理链。
@@ -180,11 +181,11 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 
 	// BashTool emitter（通道注入在 RunTaskAgent 内部）
 	var bashTool *eino.BashTool
-	tools := eino.BuildTaskTools(ctx, req.WorkDir, func(stepType, content, cmd, confirmID string) {
+	tools, finishGoalTool := eino.BuildTaskTools(ctx, req.WorkDir, func(stepType, content, cmd, confirmID string) {
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{
 			ConvID: req.ConversationID, Type: stepType, Content: content, Cmd: cmd, ConfirmID: confirmID,
 		})
-	}, planEnabled)
+	}, planEnabled, req.Goal)
 	// 找出 BashTool 引用
 	for _, t := range tools {
 		if bt, ok := t.(*eino.BashTool); ok {
@@ -210,7 +211,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 
 	// 启动 ReAct agent
 	slog.Info("StreamTask: starting RunTaskAgent", "workDir", req.WorkDir, "historyLen", len(einoHistory))
-	stepCh, err := eino.RunTaskAgent(ctx, llm, tools, bashTool, req.WorkDir, einoHistory, req.Content, buildUserMessage(req.Content, req.Attachments), planEnabled)
+	stepCh, err := eino.RunTaskAgent(ctx, llm, tools, bashTool, req.WorkDir, einoHistory, req.Content, buildUserMessage(req.Content, req.Attachments), planEnabled, req.Goal, finishGoalTool)
 	if err != nil {
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: err.Error()})
 		return err

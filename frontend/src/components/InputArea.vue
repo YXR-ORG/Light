@@ -4,7 +4,7 @@ import { useChatStore } from '../stores/chat'
 import { StreamChat, CancelStream, PickAttachments } from '../../wailsjs/go/handler/ChatHandler'
 import { StreamTask, StopTask, SelectWorkDir } from '../../wailsjs/go/handler/TaskHandler'
 import { Get } from '../../wailsjs/go/handler/SettingsHandler'
-import { SetModel, SetMode, UpdateConversationWorkDir } from '../../wailsjs/go/handler/ConversationHandler'
+import { SetModel, SetMode, UpdateConversationWorkDir, SetGoal } from '../../wailsjs/go/handler/ConversationHandler'
 import { ListEnabledModels, ListProviders } from '../../wailsjs/go/handler/ProviderHandler'
 import { ListSkills } from '../../wailsjs/go/handler/SkillHandler'
 import { List as ListMCPServers } from '../../wailsjs/go/handler/MCPHandler'
@@ -32,6 +32,10 @@ const showKBPicker = ref(false)
 
 // task 模式工作目录
 const workDir = ref('')
+
+// task 模式目标（goal 模式）
+const goal = ref('')
+const showGoalInput = ref(false)
 
 // 任务模式 tooltip（Teleport 到 body，避免 overflow:hidden 裁剪）
 const taskTip = ref({ visible: false, x: 0, y: 0 })
@@ -68,6 +72,8 @@ watch(() => store.currentConvId, async (convId) => {
   chatMode.value = mode as ChatMode
   selectedKBID.value = conv.knowledge_base_id || ''
   workDir.value = (conv as any).work_dir || ''
+  goal.value = (conv as any).goal || ''
+  showGoalInput.value = false
   // 如果是知识模式，预加载知识库列表
   if (mode === 'knowledge') {
     await loadKBs()
@@ -77,6 +83,7 @@ watch(() => store.currentConvId, async (convId) => {
 // 模式/知识库 picker 的 body 绝对定位样式
 const modPickerStyle = ref<Record<string, string>>({})
 const kbPickerStyle = ref<Record<string, string>>({})
+const goalPickerStyle = ref<Record<string, string>>({})
 
 function calcPickerPos(btnClass: string): Record<string, string> {
   const btn = document.querySelector(btnClass) as HTMLElement
@@ -96,6 +103,7 @@ function toggleModePicker() {
   showModelPicker.value = false
   showSkillPicker.value = false
   showMCPPicker.value = false
+  showGoalInput.value = false
   if (showModePicker.value) {
     nextTick(() => { modPickerStyle.value = calcPickerPos('.btn-mode') })
   }
@@ -107,9 +115,22 @@ function toggleKBPicker() {
   showModelPicker.value = false
   showSkillPicker.value = false
   showMCPPicker.value = false
+  showGoalInput.value = false
   if (showKBPicker.value) {
     loadKBs()
     nextTick(() => { kbPickerStyle.value = calcPickerPos('.btn-kb') })
+  }
+}
+
+function toggleGoalInput() {
+  showGoalInput.value = !showGoalInput.value
+  showModePicker.value = false
+  showModelPicker.value = false
+  showSkillPicker.value = false
+  showMCPPicker.value = false
+  showKBPicker.value = false
+  if (showGoalInput.value) {
+    nextTick(() => { goalPickerStyle.value = calcPickerPos('.btn-goal') })
   }
 }
 
@@ -141,6 +162,15 @@ async function pickWorkDir() {
     const conv = store.conversations.find(c => c.id === store.currentConvId) as any
     if (conv) (conv as any).work_dir = dir
   }
+}
+
+// task 模式：保存目标
+async function saveGoal() {
+  showGoalInput.value = false
+  if (!store.currentConvId) return
+  await SetGoal(store.currentConvId, goal.value).catch(() => {})
+  const conv = store.conversations.find(c => c.id === store.currentConvId) as any
+  if (conv) (conv as any).goal = goal.value
 }
 
 const selectedKBName = computed(() => {
@@ -370,6 +400,7 @@ async function sendTask(text: string) {
       work_dir: workDir.value,
       ignore_context: ignoreCtx,
       attachments: sentAttachments,
+      goal: goal.value,
     } as any)
   } catch (e: any) {
     const msg = e?.message || e?.Message || String(e)
@@ -634,11 +665,15 @@ function onKeydown(e: KeyboardEvent) {
             <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
         </div>
-        <!-- 工作目录选择器（仅 task 模式） -->
+        <!-- 工作目录选择器 + 目标设定（仅 task 模式） -->
         <div v-if="chatMode === 'task'" class="workdir-selector-wrap">
           <button class="btn-workdir" @click="pickWorkDir" title="选择工作目录">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             <span class="btn-workdir__label">{{ workDir || '选择目录' }}</span>
+          </button>
+          <button class="btn-goal" :class="{ 'btn-goal--active': !!goal }" @click.stop="toggleGoalInput" title="设定目标">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+            <span>{{ goal ? '目标已设' : '目标' }}</span>
           </button>
         </div>
         <!-- 分隔线 -->
@@ -725,6 +760,21 @@ function onKeydown(e: KeyboardEvent) {
           <span class="kb-picker-name">{{ kb.name }}</span>
           <span class="kb-picker-count">{{ kb.doc_count }} 文档</span>
         </button>
+      </div>
+      <!-- 目标输入气泡 -->
+      <div v-if="showGoalInput" class="goal-picker" :style="goalPickerStyle">
+        <textarea
+          v-model="goal"
+          class="goal-picker-input"
+          placeholder="设定目标，Agent 将自主执行直到完成（中途不打断你）"
+          rows="3"
+          @keydown.enter.exact.prevent="saveGoal"
+          @keydown.escape="showGoalInput = false"
+        ></textarea>
+        <div class="goal-picker-actions">
+          <button class="goal-btn goal-btn--clear" @click="goal = ''; saveGoal()" v-if="goal">清除</button>
+          <button class="goal-btn goal-btn--save" @click="saveGoal">确定</button>
+        </div>
       </div>
     </Teleport>
     <!-- 任务模式 tooltip（Teleport 到 body 避免被 overflow:hidden 裁剪） -->
@@ -1178,18 +1228,65 @@ textarea.has-attach-btn {
 .kb-picker-count { font-size: 11px; color: var(--color-text-3); flex-shrink: 0; margin-left: var(--space-2); }
 
 /* 工作目录选择器 */
-.workdir-selector-wrap { position: relative; max-width: 220px; }
+.workdir-selector-wrap {
+  position: relative;
+  display: flex; align-items: center; gap: 4px;
+  min-width: 0; /* 允许子元素收缩 */
+}
 .btn-workdir {
   display: flex; align-items: center; gap: 4px;
   padding: 3px var(--space-2); height: 26px;
   border: 1px solid oklch(0.75 0.12 280); border-radius: var(--radius-full);
   background: oklch(0.96 0.02 280); color: oklch(0.45 0.15 280);
   font-size: 11px; font-family: var(--font-mono); cursor: pointer;
-  max-width: 200px; transition: all var(--duration-fast);
+  min-width: 0; flex: 1; transition: all var(--duration-fast);
 }
 .btn-workdir:hover { background: oklch(0.92 0.04 280); }
 .btn-workdir__label {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 160px; direction: rtl; text-align: left;
+  min-width: 0; direction: rtl; text-align: left;
 }
+
+.btn-goal {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px var(--space-2); height: 26px;
+  border: 1px solid oklch(0.75 0.12 280); border-radius: var(--radius-full);
+  background: oklch(0.96 0.02 280); color: oklch(0.45 0.15 280);
+  font-size: 11px; cursor: pointer; transition: all var(--duration-fast);
+  flex-shrink: 0; white-space: nowrap;
+}
+.btn-goal:hover { background: oklch(0.92 0.04 280); }
+.btn-goal--active {
+  border-color: oklch(0.55 0.2 150); color: oklch(0.4 0.15 150);
+  background: oklch(0.95 0.05 150);
+}
+
+.goal-picker {
+  background: var(--color-paper); border: 1px solid var(--color-border);
+  border-radius: var(--radius-md); box-shadow: 0 -4px 20px rgba(0,0,0,.12);
+  min-width: 320px; max-width: 400px; padding: var(--space-3);
+}
+.goal-picker-input {
+  width: 100%; resize: vertical; border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); outline: none; padding: var(--space-2);
+  background: var(--color-surface); font-size: var(--text-sm); line-height: 1.5;
+  color: var(--color-text-1); font-family: inherit;
+}
+.goal-picker-input:focus { border-color: var(--color-accent); }
+.goal-picker-input::placeholder { color: var(--color-text-3); }
+.goal-picker-actions {
+  display: flex; justify-content: flex-end; gap: 6px; margin-top: var(--space-2);
+}
+.goal-btn {
+  padding: 3px 12px; height: 24px; border-radius: var(--radius-full);
+  font-size: 11px; cursor: pointer; border: none; transition: all var(--duration-fast);
+}
+.goal-btn--save {
+  background: oklch(0.55 0.2 280); color: white;
+}
+.goal-btn--save:hover { background: oklch(0.48 0.2 280); }
+.goal-btn--clear {
+  background: transparent; color: var(--color-text-3);
+}
+.goal-btn--clear:hover { color: var(--color-text-1); }
 </style>

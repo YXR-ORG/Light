@@ -37,7 +37,8 @@ func shouldRollbackTaskContent(content string, hasToolCall bool) bool {
 
 // taskSystemPrompt 构建 task 模式的 system prompt。
 // planEnabled 为 true 时注入 plan 指令（复杂任务先列计划）。
-func taskSystemPrompt(workDir string, planEnabled bool) string {
+// goal 非空时注入 goal 模式指令（持续执行直到目标达成，调用 finish_goal 结束）。
+func taskSystemPrompt(workDir string, planEnabled bool, goal string) string {
 	planHeader := ""
 	planSection := ""
 	planWorkflow := "1. 收到任务 → 直接调工具（不要先说话）"
@@ -53,6 +54,20 @@ func taskSystemPrompt(workDir string, planEnabled bool) string {
 - **只有真正的单步骤任务（一个工具调用就能完成）才跳过 update_plan**
 `
 		planWorkflow = "1. 收到任务 → **先调 update_plan 列出计划** → 再执行第一步工具"
+	}
+
+	// goal 模式注入
+	goalSection := ""
+	if goal != "" {
+		goalSection = fmt.Sprintf(`
+### %d. 目标驱动模式（已开启）
+- 你正在为一个明确的目标工作，请持续执行直到目标**完全达成**：
+  > %s
+- **当且仅当**你确认目标已完全达成，调用 **finish_goal** 工具结束任务，并在 summary 中总结成果
+- 不要在目标未达成时提前停下来问用户——遇到障碍尝试不同方案自行解决
+- 目标确实无法达成时（遇到不可解决的障碍），调用 finish_goal 并将 success 设为 false，说明原因
+- 普通命令无需用户确认即可执行，但极危险命令仍需确认
+`, planSectionNum(planEnabled), goal)
 	}
 	return fmt.Sprintf(`你是 Light 的任务执行智能体。你的工作是**动手执行**，不是**口头描述**。
 %s
@@ -101,7 +116,7 @@ func taskSystemPrompt(workDir string, planEnabled bool) string {
 - 用户说"把结果保存到 result.md" / "查看 config.json" → 这才调用 write_file / read_file
 - **用户上传了附件**：附件内容已在消息里，直接使用，不要再调 read_file 读同名文件
 - 拿不准时，优先在回答中直接输出，而不是主动触碰工作目录
-%s
+%s%s
 
 ## 可用工具
 所有已配置的工具都在你的工具列表中，包括：
@@ -115,7 +130,15 @@ func taskSystemPrompt(workDir string, planEnabled bool) string {
 3. 信息充分后 → 输出简明总结
 
 记住：**你不是一个只会说话的助手，你是一个能动手的智能体。用工具证明你的能力。**
-`, planHeader, workDir, time.Now().Format("2006-01-02 15:04"), planSection, planWorkflow)
+`, planHeader, workDir, time.Now().Format("2006-01-02 15:04"), planSection, goalSection, planWorkflow)
+}
+
+// planSectionNum 返回 plan 节在 system prompt 中的编号（plan 开启时为 7，goal 节紧随其后）。
+func planSectionNum(planEnabled bool) int {
+	if planEnabled {
+		return 8
+	}
+	return 7
 }
 
 func appendTaskPlanInstruction(msg *schema.Message) {
@@ -134,6 +157,8 @@ func appendTaskPlanInstruction(msg *schema.Message) {
 // ctx cancel → agent 停止，channel close。
 // tools 必须全部实现 tool.BaseTool（InvokableTool）。
 // bashTool 引用用于 Confirm 回调注入。
+// goal 非空时启用 goal 模式（持续执行直到 finish_goal 调用）。
+// finishGoalTool 引用用于检测 agent 是否调用了 finish_goal（可为 nil）。
 func RunTaskAgent(
 	ctx context.Context,
 	llm model.ToolCallingChatModel,
@@ -144,6 +169,8 @@ func RunTaskAgent(
 	userMsg string,
 	userInput *schema.Message,
 	planEnabled bool,
+	goal string,
+	finishGoalTool *FinishGoalTool,
 ) (<-chan TaskStep, error) {
 	if llm == nil {
 		return nil, fmt.Errorf("task agent: LLM 未配置")
@@ -175,7 +202,7 @@ func RunTaskAgent(
 	}
 
 	// System prompt 作为 agent Instruction（替代旧版 react.NewPersonaModifier）
-	sysPrompt := taskSystemPrompt(workDir, planEnabled)
+	sysPrompt := taskSystemPrompt(workDir, planEnabled, goal)
 
 	// 构造压缩中间件链（reduction + summarization）
 	// 两层防线：先机械裁剪大工具输出（零 LLM 成本），再 LLM 语义压缩长对话
@@ -233,6 +260,8 @@ func RunTaskAgent(
 		// collectedMsgs：累积的完整对话消息（assistant + tool），用于补总结轮
 		var collectedMsgs []*schema.Message
 		var collectMu sync.Mutex
+		// goalFinished：finish_goal 工具是否已被调用
+		goalFinished := false
 
 		// 单事件循环：逐轮处理模型输出（Assistant）和工具结果（Tool）
 		var finalErr error
@@ -362,6 +391,12 @@ func RunTaskAgent(
 				slog.Info("TaskAgent tool_result", "tool", name, "result_len", len(result))
 				ch <- TaskStep{Type: "tool_result", ToolName: name, ToolResult: result}
 
+				// goal 模式：检测 finish_goal 调用
+				if name == "finish_goal" && finishGoalTool != nil && finishGoalTool.IsFinished() {
+					goalFinished = true
+					slog.Info("TaskAgent: finish_goal called, stopping", "success", finishGoalTool.GetSuccess())
+				}
+
 				// 收集 tool 结果消息用于补总结轮
 				collectMu.Lock()
 				collectedMsgs = append(collectedMsgs, &schema.Message{
@@ -371,13 +406,19 @@ func RunTaskAgent(
 					ToolName:   name,
 				})
 				collectMu.Unlock()
+
+				// goal 模式：finish_goal 已调用 → 主动结束循环
+				if goalFinished {
+					runCancel()
+				}
 			}
 		}
 
 		// —— Agent 结束，判断结束原因 ——
 		normalEnd := finalErr == nil
 		isMaxSteps := finalErr != nil && strings.Contains(finalErr.Error(), "exceeds max iterations")
-		slog.Info("TaskAgent run ended", "normal", normalEnd, "max_steps", isMaxSteps, "err", finalErr)
+		// goal 模式：runCancel() 触发的 context canceled 不算正常结束，但 goalFinished 是预期行为
+		slog.Info("TaskAgent run ended", "normal", normalEnd, "max_steps", isMaxSteps, "goal_finished", goalFinished, "err", finalErr)
 
 		collectMu.Lock()
 		produced := hasFinalContent
@@ -388,6 +429,17 @@ func RunTaskAgent(
 		loopMu.Lock()
 		wasLoop := loopDetected
 		loopMu.Unlock()
+
+		// 情况 0：goal 模式 — agent 调用了 finish_goal → 直接完成
+		if goalFinished && finishGoalTool != nil {
+			if finishGoalTool.GetSuccess() {
+				ch <- TaskStep{Type: "notice", Content: "✅ 目标已达成！\n\n" + finishGoalTool.GetSummary()}
+			} else {
+				ch <- TaskStep{Type: "notice", Content: "⚠️ 目标未达成：\n\n" + finishGoalTool.GetSummary()}
+			}
+			ch <- TaskStep{Type: "done"}
+			return
+		}
 
 		// 情况 1：agent 正常结束且已产出正文 → 直接完成（最常见路径）
 		if normalEnd && produced && !wasLoop {

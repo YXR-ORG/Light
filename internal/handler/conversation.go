@@ -65,6 +65,11 @@ func (h *ConversationHandler) UpdateConversationWorkDir(id, workDir string) erro
 	return storage.UpdateConversationWorkDir(id, workDir)
 }
 
+// SetGoal 设定 task 模式的目标（goal 模式）。空字符串清除 goal。
+func (h *ConversationHandler) SetGoal(id, goal string) error {
+	return storage.UpdateConversationGoal(id, goal)
+}
+
 func (h *ConversationHandler) GetMessages(convID string) ([]storage.Message, error) {
 	return storage.GetMessages(convID)
 }
