@@ -10,6 +10,10 @@ export function Delete(arg1) {
   return window['go']['handler']['ConversationHandler']['Delete'](arg1);
 }
 
+export function Fork(arg1, arg2) {
+  return window['go']['handler']['ConversationHandler']['Fork'](arg1, arg2);
+}
+
 export function Get(arg1) {
   return window['go']['handler']['ConversationHandler']['Get'](arg1);
 }

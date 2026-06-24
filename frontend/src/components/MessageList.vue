@@ -4,6 +4,7 @@ import MessageItem from './MessageItem.vue'
 import { storage as models, type storage } from '../../wailsjs/go/models'
 import { ref, watch, nextTick, computed } from 'vue'
 import { StreamChat } from '../../wailsjs/go/handler/ChatHandler'
+import { Fork, GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 
 const store = useChatStore()
 const listRef = ref<HTMLElement | null>(null)
@@ -153,6 +154,23 @@ function isAtBottom(): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 60
 }
 
+// ── 分叉：从指定 assistant 消息处创建新会话 ─────────────────────────
+async function handleFork(msg: storage.Message) {
+  if (store.streaming) return
+  const conv = store.conversations.find(c => c.id === store.currentConvId) as any
+  if (!conv || !store.currentConvId) return
+  if (conv.mode === 'task') return // 双保险：task 模式不支持分叉
+  try {
+    const newConv = await Fork(store.currentConvId, msg.id) as any
+    store.setConversations([newConv, ...store.conversations])
+    store.setCurrentConv(newConv.id)
+    const msgs = await GetMessages(newConv.id)
+    store.setMessages(msgs)
+  } catch (e) {
+    console.error('fork failed:', e)
+  }
+}
+
 function scrollToBottom(force = false) {
   if (!force && userScrolled) return
   nextTick(() => {
@@ -210,6 +228,7 @@ watch(() => store.currentConvId, () => {
           :is-last="false"
           :show-actions="item.msg.role === 'assistant' && !store.streaming"
           @regenerate="handleRegenerate(item.groupID, idx)"
+          @fork="handleFork(item.msg)"
         />
 
         <!-- 版本切换条 -->

@@ -132,7 +132,12 @@ function escapeHtml(s: string) {
         @click.stop
         maxlength="120"
       />
-      <div v-else class="conv-title" v-html="titleHtml" />
+      <div v-else class="conv-title-row">
+        <div class="conv-title" v-html="titleHtml" />
+        <span v-if="conv.parent_conv_id" class="fork-badge" title="分叉会话">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M6 8v8M18 8c0 4-3 5-6 5"/></svg>
+        </span>
+      </div>
       <div class="conv-meta">{{ providerName || conv.provider }} · {{ conv.model }}</div>
     </div>
 
@@ -217,12 +222,27 @@ function escapeHtml(s: string) {
 
 .conv-body { flex: 1; min-width: 0; }
 
+.conv-title-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .conv-title {
+  flex: 1;
+  min-width: 0;
   font-size: var(--text-sm); font-weight: 500;
   line-height: var(--leading-tight);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .conv-meta { font-size: var(--text-xs); color: var(--color-text-3); margin-top: 2px; }
+
+.fork-badge {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: oklch(0.55 0.15 280);
+  opacity: 0.7;
+}
 
 .rename-input {
   width: 100%; font-size: var(--text-sm); font-weight: 500;

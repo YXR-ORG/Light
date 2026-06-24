@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -227,4 +229,143 @@ func SaveTaskMessageWithAttachments(convID, role, content, attachments string) (
 			Update("updated_at", time.Now())
 	}
 	return m, err
+}
+
+// ForkConversation 从 srcConvID 的 forkFromMsgID 处分叉创建新会话。
+// 复制 forkFromMsgID 所在 group（含）之前的所有消息（仅最新版本），
+// 新会话继承 provider/model/system_prompt/agent_id/mcp_server_ids/mode/knowledge_base_id。
+// task 模式不支持分叉（调用方负责校验）。
+func ForkConversation(srcConvID, forkFromMsgID string) (*Conversation, error) {
+	var src Conversation
+	if err := DB.First(&src, "id = ?", srcConvID).Error; err != nil {
+		return nil, fmt.Errorf("source conversation not found: %w", err)
+	}
+	if src.Mode == "task" {
+		return nil, fmt.Errorf("task 模式不支持分叉")
+	}
+
+	// 拉取源会话全部消息（按 created_at 升序）
+	var allMsgs []Message
+	if err := DB.Where("conversation_id = ?", srcConvID).
+		Order("created_at ASC").Find(&allMsgs).Error; err != nil {
+		return nil, fmt.Errorf("load source messages: %w", err)
+	}
+
+	// 定位 forkFromMsgID 所在的 GenerationGroupID
+	var forkGroupID string
+	forkFound := false
+	for _, m := range allMsgs {
+		if m.ID == forkFromMsgID {
+			forkGroupID = m.GenerationGroupID
+			if forkGroupID == "" {
+				forkGroupID = m.ID
+			}
+			forkFound = true
+			break
+		}
+	}
+	if !forkFound {
+		return nil, fmt.Errorf("fork message not found in conversation")
+	}
+
+	// 找到该 group 在消息序列中的最后位置（按 created_at）
+	// group 内可能有多条（重生成版本），取 group 最后一条的位置作为分叉边界
+	forkEndIdx := -1
+	for i, m := range allMsgs {
+		gid := m.GenerationGroupID
+		if gid == "" {
+			gid = m.ID
+		}
+		if gid == forkGroupID {
+			forkEndIdx = i // 持续更新到该 group 的最后一条
+		}
+	}
+
+	// 收集要复制的消息：到 forkEndIdx 为止，但 group 内只取最新版本
+	// （与 GetLatestMessages 相同的 group 去重逻辑，但仅限 forkEndIdx 之前）
+	type groupKey = string
+	latest := make(map[groupKey]*Message)
+	order := []groupKey{}
+	for i := 0; i <= forkEndIdx; i++ {
+		m := &allMsgs[i]
+		gid := m.GenerationGroupID
+		if gid == "" {
+			gid = m.ID
+		}
+		if prev, ok := latest[gid]; !ok {
+			latest[gid] = m
+			order = append(order, gid)
+		} else if m.GenIndex > prev.GenIndex {
+			latest[gid] = m
+		}
+	}
+
+	// 计算新标题：原标题 + " (分叉)"，已含则加序号
+	newTitle := src.Title
+	if !strings.Contains(newTitle, "(分叉)") {
+		newTitle = newTitle + " (分叉)"
+	} else {
+		// 已有 (分叉) 后缀，追加序号
+		base := strings.TrimSuffix(newTitle, " (分叉)")
+		for n := 2; ; n++ {
+			candidate := fmt.Sprintf("%s (分叉 %d)", base, n)
+			var count int64
+			DB.Model(&Conversation{}).Where("title = ?", candidate).Count(&count)
+			if count == 0 {
+				newTitle = candidate
+				break
+			}
+		}
+	}
+
+	newID := NewID()
+	newConv := &Conversation{
+		ID:              newID,
+		Title:           newTitle,
+		Provider:        src.Provider,
+		Model:           src.Model,
+		SystemPrompt:    src.SystemPrompt,
+		AgentID:         src.AgentID,
+		MCPServerIDs:    src.MCPServerIDs,
+		Mode:            src.Mode,
+		KnowledgeBaseID: src.KnowledgeBaseID,
+		ParentConvID:    srcConvID,
+		ForkFromMsgID:   forkFromMsgID,
+	}
+
+	// 单事务：创建会话 + 复制消息
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(newConv).Error; err != nil {
+			return fmt.Errorf("create forked conversation: %w", err)
+		}
+		for _, gid := range order {
+			src := latest[gid]
+			msgID := NewID()
+			newMsg := Message{
+				ID:                msgID,
+				ConversationID:    newID,
+				Role:              src.Role,
+				Content:           src.Content,
+				Thinking:          src.Thinking,
+				ToolCalls:         src.ToolCalls,
+				ToolResult:        src.ToolResult,
+				Attachments:       src.Attachments,
+				Artifacts:         src.Artifacts,
+				AgentID:           src.AgentID,
+				MCPServerIDs:      src.MCPServerIDs,
+				Mode:              src.Mode,
+				KnowledgeBaseID:   src.KnowledgeBaseID,
+				GenerationGroupID: msgID, // 重置为自身，新会话从干净状态开始
+				GenIndex:          0,
+			}
+			if err := tx.Create(&newMsg).Error; err != nil {
+				return fmt.Errorf("copy message: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return newConv, nil
 }

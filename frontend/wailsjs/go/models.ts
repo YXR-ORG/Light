@@ -222,6 +222,8 @@ export namespace storage {
 	    mode: string;
 	    knowledge_base_id: string;
 	    work_dir: string;
+	    parent_conv_id: string;
+	    fork_from_msg_id: string;
 	    // Go type: time
 	    created_at: any;
 	    // Go type: time
@@ -244,6 +246,8 @@ export namespace storage {
 	        this.mode = source["mode"];
 	        this.knowledge_base_id = source["knowledge_base_id"];
 	        this.work_dir = source["work_dir"];
+	        this.parent_conv_id = source["parent_conv_id"];
+	        this.fork_from_msg_id = source["fork_from_msg_id"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	    }

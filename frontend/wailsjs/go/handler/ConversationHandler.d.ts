@@ -6,6 +6,8 @@ export function Create(arg1:string,arg2:string):Promise<storage.Conversation>;
 
 export function Delete(arg1:string):Promise<void>;
 
+export function Fork(arg1:string,arg2:string):Promise<storage.Conversation>;
+
 export function Get(arg1:string):Promise<storage.Conversation>;
 
 export function GetMessages(arg1:string):Promise<Array<storage.Message>>;

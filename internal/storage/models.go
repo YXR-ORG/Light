@@ -20,6 +20,8 @@ type Conversation struct {
 	Mode            string    `gorm:"size:16;default:'chat'" json:"mode"`            // chat | knowledge | task
 	KnowledgeBaseID string    `gorm:"size:36;default:''" json:"knowledge_base_id"`   // 知识库 ID（mode=knowledge 时有值）
 	WorkDir         string    `gorm:"type:text;default:''" json:"work_dir"`          // task 模式工作目录
+	ParentConvID    string    `gorm:"size:36;default:''" json:"parent_conv_id"`      // 分叉来源会话 ID（空=原始会话）
+	ForkFromMsgID   string    `gorm:"size:36;default:''" json:"fork_from_msg_id"`    // 分叉来源消息 ID
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }

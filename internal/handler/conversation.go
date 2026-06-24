@@ -78,3 +78,17 @@ func (h *ConversationHandler) ToggleFavorite(id string) (bool, error) {
 func (h *ConversationHandler) ListFavorites() ([]storage.Conversation, error) {
 	return storage.ListFavorites()
 }
+
+// Fork 从指定消息处分叉创建新会话。task 模式不支持分叉。
+// 复制到 forkFromMsgID 所在 group（含）为止的消息（仅最新版本），
+// 新会话继承源会话的模型、智能体、模式等配置。
+func (h *ConversationHandler) Fork(convID, msgID string) (*storage.Conversation, error) {
+	conv, err := storage.GetConversation(convID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation not found: %w", err)
+	}
+	if conv.Mode == "task" {
+		return nil, fmt.Errorf("task 模式不支持分叉")
+	}
+	return storage.ForkConversation(convID, msgID)
+}
