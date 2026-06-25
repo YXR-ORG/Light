@@ -126,8 +126,9 @@ const artifacts = computed<Artifact[]>(() => {
 
 const taskArtifacts = computed(() => splitTaskArtifacts(artifacts.value))
 
-// plan 产物放回复区顶部（执行导航）；“本次涉及的文件”只展示真正的 file 产物。
+// plan 产物放回复区顶部（执行导航）；requirement/review 紧随其后；”本次涉及的文件”只展示真正的 file 产物。
 const planArtifacts = computed(() => taskArtifacts.value.plans)
+const specArtifacts = computed(() => taskArtifacts.value.specs)
 const fileArtifacts = computed(() => taskArtifacts.value.files)
 
 interface AttachmentMeta { name: string; mime_type: string }
@@ -184,6 +185,7 @@ function onMarkdownClick(e: MouseEvent) {
       <template v-else>
         <template v-if="isHistory">
           <ArtifactCard v-for="(p, i) in planArtifacts" :key="'plan-' + i" :artifact="p" />
+          <ArtifactCard v-for="(s, i) in specArtifacts" :key="'spec-' + i" :artifact="s" />
           <div class="task-answer__bubble markdown-body" v-html="finalHtml" @click="onMarkdownClick" />
           <div v-if="showActions" class="task-msg-actions">
             <button class="task-msg-action" :class="{ copied }" @click="copyTaskContent" :title="copied ? '已复制' : '复制'">
@@ -205,6 +207,7 @@ function onMarkdownClick(e: MouseEvent) {
 
         <template v-else>
           <ArtifactCard v-for="(p, i) in planArtifacts" :key="'plan-' + i" :artifact="p" />
+          <ArtifactCard v-for="(s, i) in specArtifacts" :key="'spec-' + i" :artifact="s" />
 
           <div v-if="chainSteps.length" class="task-chain">
             <button class="chain-header" @click="chainOpen = !chainOpen">

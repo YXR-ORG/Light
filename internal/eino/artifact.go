@@ -15,7 +15,7 @@ import (
 // 前端解析标记后自动在“产物区”渲染对应卡片。
 // 新工具想展示产物，只需调用 EmbedArtifact，无需改 agent 或前端任何代码。
 type Artifact struct {
-	Type    string `json:"type"`               // 产物类型：file | image | url | plan | ...（可扩展）
+	Type    string `json:"type"`               // 产物类型：file | image | url | plan | requirement | review（可扩展）
 	Action  string `json:"action,omitempty"`   // 动作：write | read（file 专用）
 	Title   string `json:"title,omitempty"`    // 展示标题（如文件名）
 	Path    string `json:"path,omitempty"`     // 相对路径（file）
@@ -27,12 +27,28 @@ type Artifact struct {
 	// plan 专用：同一 plan 多次更新共享 PlanID，前端按此去重保留最新
 	PlanID string     `json:"plan_id,omitempty"`
 	Steps  []PlanStep `json:"steps,omitempty"`
+
+	// requirement 专用：需求规格全文
+	Requirement string `json:"requirement,omitempty"`
+
+	// requirement / review 专用：验收标准项
+	AcceptanceCriteria []AcceptItem `json:"acceptance_criteria,omitempty"`
+
+	// review 专用：验收总结
+	ReviewSummary string `json:"review_summary,omitempty"`
 }
 
 // PlanStep 是 plan 产物中的一个步骤。
 type PlanStep struct {
 	Content string `json:"content"`          // 步骤描述
 	Status  string `json:"status,omitempty"` // pending | in_progress | done
+}
+
+// AcceptItem 是验收标准/验收报告中的一个检查项。
+type AcceptItem struct {
+	Content string `json:"content"`          // 验收项描述
+	Status  string `json:"status,omitempty"` // pass | fail | pending（review 用）
+	Detail  string `json:"detail,omitempty"` // 验收说明（review 用，为何 pass/fail）
 }
 
 // artifactMarkerRe 匹配产物标记：<!--ARTIFACT:base64-->

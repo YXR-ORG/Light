@@ -25,16 +25,19 @@ import (
 //   - Web search（若已配置 API key）
 //   - BashTool（workDir 限定）
 //   - FileTool x4（workDir 限定）
-//   - FinishGoalTool（仅 goal 模式）
+//   - FinishGoalTool（仅 goal/workflow 模式）
+//   - SpecTool（仅 workflow 模式）
+//   - PlanTool（planEnabled 或 workflow 模式）
 //
 // goal 非空时启用 goal 模式：BashTool autoApprove=true（跳过普通危险命令确认）。
-// 返回 FinishGoalTool 引用供 react_agent 检测（goal 模式才有，否则 nil）。
+// workflow 非空时启用工作流模式：autoApprove=true + SpecTool + 强制 plan + finish_goal。
+// 返回 FinishGoalTool 和 SpecTool 引用供 react_agent 检测（仅对应模式才有，否则 nil）。
 // 任何单个资源加载失败只记 warn 日志，不中断整体。
-func BuildTaskTools(ctx context.Context, workDir string, emitter BashStepEmitter, planEnabled bool, goal string) ([]tool.BaseTool, *FinishGoalTool) {
+func BuildTaskTools(ctx context.Context, workDir string, emitter BashStepEmitter, planEnabled bool, goal, workflow string) ([]tool.BaseTool, *FinishGoalTool, *SpecTool) {
 	var tools []tool.BaseTool
 
-	// 0. Plan 工具（仅在全局开关开启时）
-	if planEnabled {
+	// 0. Plan 工具（planEnabled 或 workflow 模式时启用）
+	if planEnabled || workflow != "" {
 		tools = append(tools, NewPlanTool())
 	}
 
@@ -73,24 +76,31 @@ func BuildTaskTools(ctx context.Context, workDir string, emitter BashStepEmitter
 		tools = append(tools, wsTool)
 	}
 
-	// 5. BashTool（goal 模式 autoApprove=true）
+	// 5. BashTool（goal/workflow 模式 autoApprove=true）
 	blacklist := storage.GetSettingWithDefault("task_bash_blacklist", "")
-	autoApprove := goal != ""
+	autoApprove := goal != "" || workflow != ""
 	tools = append(tools, NewBashTool(workDir, blacklist, emitter, autoApprove))
 
 	// 6. FileTool x4
 	tools = append(tools, NewFileTools(workDir)...)
 
-	// 7. FinishGoalTool（仅 goal 模式）
+	// 7. SpecTool（仅 workflow 模式）
+	var specTool *SpecTool
+	if workflow != "" {
+		specTool = NewSpecTool()
+		tools = append(tools, specTool)
+	}
+
+	// 8. FinishGoalTool（仅 goal/workflow 模式）
 	var finishGoalTool *FinishGoalTool
-	if goal != "" {
+	if goal != "" || workflow != "" {
 		finishGoalTool = NewFinishGoalTool()
 		tools = append(tools, finishGoalTool)
 	}
 
 	slog.Info("BuildTaskTools", "total", len(tools),
-		"mcp_skills_kbs", len(tools)-5, "goal_mode", goal != "")
-	return tools, finishGoalTool
+		"mcp_skills_kbs", len(tools)-5, "goal_mode", goal != "", "workflow_mode", workflow != "")
+	return tools, finishGoalTool, specTool
 }
 
 // loadAllMCPTools 连接所有已启用 MCP server，返回其工具。

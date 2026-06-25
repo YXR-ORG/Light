@@ -23,7 +23,7 @@ const webSearch = ref(false)
 const ignoreContext = computed(() => store.contextCutoffId !== null)
 
 // 对话模式
-type ChatMode = 'chat' | 'knowledge' | 'task'
+type ChatMode = 'chat' | 'knowledge' | 'task' | 'workflow'
 const chatMode = ref<ChatMode>('chat')
 const showModePicker = ref(false)
 const availableKBs = ref<storage.KnowledgeBase[]>([])
@@ -400,7 +400,8 @@ async function sendTask(text: string) {
       work_dir: workDir.value,
       ignore_context: ignoreCtx,
       attachments: sentAttachments,
-      goal: goal.value,
+      goal: chatMode.value === 'workflow' ? '' : goal.value,
+      workflow: chatMode.value === 'workflow' ? goal.value : '',
     } as any)
   } catch (e: any) {
     const msg = e?.message || e?.Message || String(e)
@@ -417,8 +418,8 @@ async function send() {
   if (!text || !store.currentConvId) return
   const convID = store.currentConvId
 
-  // task 模式走独立路径
-  if (chatMode.value === 'task') {
+  // task / workflow 模式走独立路径
+  if (chatMode.value === 'task' || chatMode.value === 'workflow') {
     await sendTask(text)
     return
   }
@@ -512,7 +513,7 @@ async function send() {
 }
 
 async function stop() {
-  if (chatMode.value === 'task') {
+  if (chatMode.value === 'task' || chatMode.value === 'workflow') {
     if (store.currentConvId) await StopTask(store.currentConvId).catch(() => {})
     store.setStreaming(false)
   } else {
@@ -654,6 +655,10 @@ function onKeydown(e: KeyboardEvent) {
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
               任务
             </span>
+            <span v-else-if="chatMode === 'workflow'">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+              工作流
+            </span>
             <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
         </div>
@@ -665,15 +670,15 @@ function onKeydown(e: KeyboardEvent) {
             <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
         </div>
-        <!-- 工作目录选择器 + 目标设定（仅 task 模式） -->
-        <div v-if="chatMode === 'task'" class="workdir-selector-wrap">
+        <!-- 工作目录选择器 + 需求/目标设定（task / workflow 模式） -->
+        <div v-if="chatMode === 'task' || chatMode === 'workflow'" class="workdir-selector-wrap">
           <button class="btn-workdir" @click="pickWorkDir" title="选择工作目录">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             <span class="btn-workdir__label">{{ workDir || '选择目录' }}</span>
           </button>
-          <button class="btn-goal" :class="{ 'btn-goal--active': !!goal }" @click.stop="toggleGoalInput" title="设定目标">
+          <button class="btn-goal" :class="{ 'btn-goal--active': !!goal }" @click.stop="toggleGoalInput" :title="chatMode === 'workflow' ? '设定需求' : '设定目标'">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-            <span>{{ goal ? '目标已设' : '目标' }}</span>
+            <span>{{ chatMode === 'workflow' ? (goal ? '需求已设' : '需求') : (goal ? '目标已设' : '目标') }}</span>
           </button>
         </div>
         <!-- 分隔线 -->
@@ -685,31 +690,31 @@ function onKeydown(e: KeyboardEvent) {
         <!-- 忽略上下文（一次性：点击=本次不带上下文+显示分割线，再点取消；不显示选中高亮） -->
         <button
           class="btn-tool"
-          @click="chatMode === 'task' ? store.toggleTaskContextCutoff() : store.toggleContextCutoff()"
-          :title="(chatMode === 'task' ? store.taskCutoffActive : ignoreContext) ? '取消清除上下文' : '清除上下文（本次不带历史）'"
+          @click="chatMode === 'task' || chatMode === 'workflow' ? store.toggleTaskContextCutoff() : store.toggleContextCutoff()"
+          :title="(chatMode === 'task' || chatMode === 'workflow' ? store.taskCutoffActive : ignoreContext) ? '取消清除上下文' : '清除上下文（本次不带历史）'"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/><line x1="18" y1="3" x2="6" y2="21" stroke-width="1.5"/></svg>
         </button>
         <!-- 联网搜索 -->
-        <button class="btn-tool" :class="{ active: webSearch, 'btn-tool--disabled': chatMode === 'task' }"
-          @mouseenter="chatMode === 'task' && openTaskTip($event)"
-          @mouseleave="chatMode === 'task' && closeTaskTip()"
-          @click="chatMode === 'task' ? clickTaskTip($event) : (webSearch = !webSearch)">
+        <button class="btn-tool" :class="{ active: webSearch, 'btn-tool--disabled': chatMode === 'task' || chatMode === 'workflow' }"
+          @mouseenter="(chatMode === 'task' || chatMode === 'workflow') && openTaskTip($event)"
+          @mouseleave="(chatMode === 'task' || chatMode === 'workflow') && closeTaskTip()"
+          @click="chatMode === 'task' || chatMode === 'workflow' ? clickTaskTip($event) : (webSearch = !webSearch)">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
         </button>
         <!-- Skills -->
-        <button class="btn-tool btn-skill-picker" :class="{ active: showSkillPicker || selectedSkillIDs.length > 0, 'btn-tool--disabled': chatMode === 'task' }"
-          @mouseenter="chatMode === 'task' && openTaskTip($event)"
-          @mouseleave="chatMode === 'task' && closeTaskTip()"
-          @click="chatMode === 'task' ? clickTaskTip($event) : toggleSkillPicker()">
+        <button class="btn-tool btn-skill-picker" :class="{ active: showSkillPicker || selectedSkillIDs.length > 0, 'btn-tool--disabled': chatMode === 'task' || chatMode === 'workflow' }"
+          @mouseenter="(chatMode === 'task' || chatMode === 'workflow') && openTaskTip($event)"
+          @mouseleave="(chatMode === 'task' || chatMode === 'workflow') && closeTaskTip()"
+          @click="chatMode === 'task' || chatMode === 'workflow' ? clickTaskTip($event) : toggleSkillPicker()">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
           <span v-if="selectedSkillIDs.length > 0" class="skill-count">{{ selectedSkillIDs.length }}</span>
         </button>
         <!-- MCP -->
-        <button class="btn-tool btn-mcp-picker" :class="{ active: showMCPPicker || selectedMCPIDs.length > 0, 'btn-tool--disabled': chatMode === 'task' }"
-          @mouseenter="chatMode === 'task' && openTaskTip($event)"
-          @mouseleave="chatMode === 'task' && closeTaskTip()"
-          @click="chatMode === 'task' ? clickTaskTip($event) : toggleMCPPicker()">
+        <button class="btn-tool btn-mcp-picker" :class="{ active: showMCPPicker || selectedMCPIDs.length > 0, 'btn-tool--disabled': chatMode === 'task' || chatMode === 'workflow' }"
+          @mouseenter="(chatMode === 'task' || chatMode === 'workflow') && openTaskTip($event)"
+          @mouseleave="(chatMode === 'task' || chatMode === 'workflow') && closeTaskTip()"
+          @click="chatMode === 'task' || chatMode === 'workflow' ? clickTaskTip($event) : toggleMCPPicker()">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
           <span v-if="selectedMCPIDs.length > 0" class="mcp-count">{{ selectedMCPIDs.length }}</span>
         </button>
@@ -751,6 +756,10 @@ function onKeydown(e: KeyboardEvent) {
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           <div><div class="mode-name">任务</div><div class="mode-desc">自主 Agent 模式</div></div>
         </button>
+        <button class="mode-option" :class="{ active: chatMode === 'workflow' }" @click="selectMode('workflow')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+          <div><div class="mode-name">工作流</div><div class="mode-desc">需求→设计→编码→验收</div></div>
+        </button>
       </div>
       <div v-if="showKBPicker" class="kb-picker" :style="kbPickerStyle">
         <div v-if="availableKBs.length === 0" class="kb-picker-empty">还没有知识库，请先在设置中创建</div>
@@ -761,18 +770,20 @@ function onKeydown(e: KeyboardEvent) {
           <span class="kb-picker-count">{{ kb.doc_count }} 文档</span>
         </button>
       </div>
-      <!-- 目标输入气泡 -->
+      <!-- 需求/目标输入气泡 -->
       <div v-if="showGoalInput" class="goal-picker" :style="goalPickerStyle">
         <textarea
           v-model="goal"
           class="goal-picker-input"
-          placeholder="设定目标，Agent 将自主执行直到完成（中途不打断你）"
+          :placeholder="chatMode === 'workflow'
+            ? '描述需求，Agent 将按 需求→设计→编码→验收 流程自主执行'
+            : '设定目标，Agent 将自主执行直到完成（中途不打断你）'"
           rows="3"
           @keydown.enter.exact.prevent="saveGoal"
           @keydown.escape="showGoalInput = false"
         ></textarea>
         <div class="goal-picker-actions">
-          <button class="goal-btn goal-btn--clear" @click="goal = ''; saveGoal()" v-if="goal">清除</button>
+          <button class="goal-btn goal-btn--clear" @click="goal = ''; saveGoal()" v-if="goal">{{ chatMode === 'workflow' ? '清除需求' : '清除目标' }}</button>
           <button class="goal-btn goal-btn--save" @click="saveGoal">确定</button>
         </div>
       </div>

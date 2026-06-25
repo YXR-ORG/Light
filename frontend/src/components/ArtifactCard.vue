@@ -71,6 +71,21 @@ function stepIcon(status?: string) {
   if (status === 'in_progress') return '◐'
   return '○'
 }
+
+// requirement / review：验收项
+const acceptItems = computed(() => a.value.acceptance_criteria || [])
+const reviewPassCount = computed(() => acceptItems.value.filter(i => i.status === 'pass').length)
+const reviewProgressClass = computed(() => {
+  if (acceptItems.value.length === 0) return ''
+  if (reviewPassCount.value === acceptItems.value.length) return 'all-pass'
+  if (reviewPassCount.value === 0) return 'all-fail'
+  return 'partial'
+})
+function acceptIcon(status?: string) {
+  if (status === 'pass') return '✓'
+  if (status === 'fail') return '✗'
+  return '○'
+}
 </script>
 
 <template>
@@ -87,6 +102,41 @@ function stepIcon(status?: string) {
         <span class="plan-step__text">{{ s.content }}</span>
       </li>
     </ul>
+  </div>
+
+  <!-- requirement：需求规格 -->
+  <div v-else-if="a.type === 'requirement'" class="spec-card spec-card--requirement">
+    <div class="spec-card__head">
+      <span class="spec-card__icon">📋</span>
+      <span class="spec-card__title">需求规格</span>
+    </div>
+    <div v-if="a.requirement" class="spec-card__requirement">{{ a.requirement }}</div>
+    <div v-if="acceptItems.length > 0" class="spec-card__section-label">验收标准</div>
+    <ul v-if="acceptItems.length > 0" class="spec-card__criteria">
+      <li v-for="(item, i) in acceptItems" :key="i" class="accept-item accept-item--pending">
+        <span class="accept-item__icon">○</span>
+        <span class="accept-item__text">{{ item.content }}</span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- review：验收报告 -->
+  <div v-else-if="a.type === 'review'" class="spec-card spec-card--review">
+    <div class="spec-card__head">
+      <span class="spec-card__icon">🔍</span>
+      <span class="spec-card__title">验收报告</span>
+      <span class="spec-card__progress" :class="reviewProgressClass">{{ reviewPassCount }}/{{ acceptItems.length }}</span>
+    </div>
+    <ul v-if="acceptItems.length > 0" class="spec-card__criteria">
+      <li v-for="(item, i) in acceptItems" :key="i" class="accept-item" :class="'accept-item--' + (item.status || 'pending')">
+        <span class="accept-item__icon">{{ acceptIcon(item.status) }}</span>
+        <div class="accept-item__body">
+          <span class="accept-item__text">{{ item.content }}</span>
+          <span v-if="item.detail" class="accept-item__detail">{{ item.detail }}</span>
+        </div>
+      </li>
+    </ul>
+    <div v-if="a.review_summary" class="spec-card__summary" :class="reviewProgressClass">{{ a.review_summary }}</div>
   </div>
 
   <!-- file / url / image：单卡片 -->
@@ -176,4 +226,76 @@ function stepIcon(status?: string) {
 .plan-step.done .plan-step__text { color: var(--color-text-3); text-decoration: line-through; }
 .plan-step.in_progress .plan-step__icon { color: var(--color-accent); }
 .plan-step.in_progress .plan-step__text { color: var(--color-text); font-weight: 500; }
+
+/* requirement / review 卡片 */
+.spec-card {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-paper-2);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.spec-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-paper-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.spec-card__icon { font-size: 15px; }
+.spec-card__title { font-size: 13px; font-weight: 600; color: var(--color-text); flex: 1; }
+.spec-card__progress {
+  font-size: 12px; font-weight: 600; color: var(--color-text-3);
+  font-variant-numeric: tabular-nums;
+}
+.spec-card__progress.all-pass { color: oklch(0.55 0.15 150); }
+.spec-card__progress.all-fail { color: oklch(0.55 0.2 25); }
+.spec-card__progress.partial { color: oklch(0.6 0.15 70); }
+.spec-card__requirement {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--color-text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-bottom: 1px solid var(--color-border);
+}
+.spec-card__section-label {
+  padding: 6px 12px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.spec-card__criteria { list-style: none; margin: 0; padding: 4px 0 8px; }
+.accept-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.accept-item__icon { flex-shrink: 0; width: 14px; text-align: center; color: var(--color-text-3); }
+.accept-item__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.accept-item__text { color: var(--color-text-2); word-break: break-word; }
+.accept-item__detail { font-size: 11px; color: var(--color-text-3); }
+.accept-item--pass .accept-item__icon { color: oklch(0.55 0.15 150); }
+.accept-item--pass .accept-item__text { color: var(--color-text-3); }
+.accept-item--fail .accept-item__icon { color: oklch(0.55 0.2 25); }
+.accept-item--fail .accept-item__text { color: var(--color-text-2); }
+.accept-item--fail .accept-item__detail { color: oklch(0.5 0.15 25); }
+.accept-item--pending .accept-item__icon { color: var(--color-text-3); }
+.spec-card__summary {
+  padding: 6px 12px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-3);
+  border-top: 1px solid var(--color-border);
+}
+.spec-card__summary.all-pass { color: oklch(0.5 0.15 150); }
+.spec-card__summary.all-fail { color: oklch(0.5 0.2 25); }
+.spec-card__summary.partial { color: oklch(0.55 0.15 70); }
 </style>

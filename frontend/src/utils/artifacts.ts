@@ -9,8 +9,14 @@ export interface PlanStep {
   status?: string   // pending | in_progress | done
 }
 
+export interface AcceptItem {
+  content: string
+  status?: string   // pass | fail | pending
+  detail?: string
+}
+
 export interface Artifact {
-  type: string          // file | image | url | plan | ...（可扩展）
+  type: string          // file | image | url | plan | requirement | review（可扩展）
   action?: string       // write | read（file 专用）
   title?: string        // 展示标题
   path?: string         // 相对路径（file）
@@ -20,11 +26,15 @@ export interface Artifact {
   mime?: string         // MIME 类型
   plan_id?: string      // plan 去重标识
   steps?: PlanStep[]    // plan 步骤
+  requirement?: string           // requirement 全文
+  acceptance_criteria?: AcceptItem[]  // requirement / review 验收项
+  review_summary?: string        // review 总结
 }
 
 export interface TaskArtifacts {
   plans: Artifact[]
   files: Artifact[]
+  specs: Artifact[]   // requirement + review
   others: Artifact[]
 }
 
@@ -63,6 +73,7 @@ export function stripArtifacts(text?: string): string {
 
 // 从多个 tool_result 收集产物，按去重键去重。
 //   - plan：按 plan_id 去重，总是保留最新一次（后者覆盖）
+//   - requirement / review：按 title 去重，总是保留最新
 //   - file：按 abs_path，write 优先覆盖 read
 //   - url/其他：按 url / title
 export function collectArtifacts(results: (string | undefined)[]): Artifact[] {
@@ -72,6 +83,11 @@ export function collectArtifacts(results: (string | undefined)[]): Artifact[] {
       if (a.type === 'plan') {
         // plan 始终保留最新（按 plan_id，无则用固定键）
         map.set('plan:' + (a.plan_id || 'default'), a)
+        continue
+      }
+      if (a.type === 'requirement' || a.type === 'review') {
+        // requirement/review 始终保留最新
+        map.set(a.type + ':' + (a.title || 'default'), a)
         continue
       }
       const key = a.abs_path || a.url || a.title || JSON.stringify(a)
@@ -92,14 +108,16 @@ function artifactType(a: Artifact): string {
 export function splitTaskArtifacts(artifacts: Artifact[]): TaskArtifacts {
   const plans: Artifact[] = []
   const files: Artifact[] = []
+  const specs: Artifact[] = []
   const others: Artifact[] = []
 
   for (const a of artifacts) {
     const t = artifactType(a)
     if (t === 'plan') plans.push(a)
     else if (t === 'file') files.push(a)
+    else if (t === 'requirement' || t === 'review') specs.push(a)
     else others.push(a)
   }
 
-  return { plans, files, others }
+  return { plans, files, specs, others }
 }

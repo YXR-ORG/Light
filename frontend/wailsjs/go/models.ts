@@ -99,6 +99,7 @@ export namespace handler {
 	    ignore_context: boolean;
 	    attachments: Attachment[];
 	    goal: string;
+	    workflow: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new StreamTaskRequest(source);
@@ -116,6 +117,7 @@ export namespace handler {
 	        this.ignore_context = source["ignore_context"];
 	        this.attachments = this.convertValues(source["attachments"], Attachment);
 	        this.goal = source["goal"];
+	        this.workflow = source["workflow"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

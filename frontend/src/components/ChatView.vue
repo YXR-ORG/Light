@@ -180,10 +180,16 @@ function applyStepToTaskState(state: TaskViewState, evt: TaskStepEvent) {
   })
 }
 
-// 当前会话是否为 task 模式
+// 当前会话是否为 task / workflow 模式（workflow 复用 task 渲染路径）
 const isTaskMode = computed(() => {
   const conv = store.conversations.find(c => c.id === store.currentConvId) as any
-  return conv?.mode === 'task'
+  return conv?.mode === 'task' || conv?.mode === 'workflow'
+})
+
+// 当前是否为 workflow 模式（header badge 区分）
+const isWorkflowMode = computed(() => {
+  const conv = store.conversations.find(c => c.id === store.currentConvId) as any
+  return conv?.mode === 'workflow'
 })
 
 const showTaskHistory = computed(() => shouldShowTaskHistory(taskHistoryMsgs.value.length, completedRounds.value.length))
@@ -312,10 +318,11 @@ onUnmounted(() => {
         <span class="chat-header-model" v-if="store.conversations.find(c => c.id === store.currentConvId) as any">
           {{ store.providerMap[(store.conversations.find(c => c.id === store.currentConvId) as any)?.provider] || (store.conversations.find(c => c.id === store.currentConvId) as any)?.provider }} · {{ (store.conversations.find(c => c.id === store.currentConvId) as any)?.model }}
         </span>
-        <!-- task 模式标签 -->
+        <!-- task / workflow 模式标签 -->
         <span v-if="isTaskMode" class="chat-header-badge">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          任务模式
+          <svg v-if="isWorkflowMode" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+          <svg v-else width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          {{ isWorkflowMode ? '工作流模式' : '任务模式' }}
         </span>
       </div>
     </div>
@@ -384,8 +391,9 @@ onUnmounted(() => {
 
       <!-- 空状态 -->
       <div v-if="taskHistoryMsgs.length === 0 && completedRounds.length === 0 && !taskStreaming" class="task-empty">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        <p>任务模式：Agent 将自主规划并执行多步骤任务</p>
+        <svg v-if="isWorkflowMode" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+        <svg v-else width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        <p>{{ isWorkflowMode ? '工作流模式：Agent 将按 需求→设计→编码→验收 流程自主执行' : '任务模式：Agent 将自主规划并执行多步骤任务' }}</p>
       </div>
     </div>
 

@@ -16,7 +16,8 @@
 | 看 task 产物机制 | [`superpowers/specs/2026-06-04-task-artifact-mechanism.md`](superpowers/specs/2026-06-04-task-artifact-mechanism.md) | Artifact、plan/file 分桶、历史恢复、自适应执行 |
 | 看会话压缩 | [`superpowers/specs/2026-06-22-session-compression.md`](superpowers/specs/2026-06-22-session-compression.md) | ⭐ **当前最新**：上下文压缩 + eino adk API 迁移完整方案 |
 | 看会话分叉 | [`superpowers/specs/2026-06-23-session-fork.md`](superpowers/specs/2026-06-23-session-fork.md) | 从任意 AI 回复处分叉创建新会话 |
-| 看 Goal 模式 | [`superpowers/specs/2026-06-24-goal-mode.md`](superpowers/specs/2026-06-24-goal-mode.md) | ⭐ **当前最新**：目标驱动自主执行，Agent 持续工作直到目标达成 |
+| 看 Goal 模式 | [`superpowers/specs/2026-06-24-goal-mode.md`](superpowers/specs/2026-06-24-goal-mode.md) | 目标驱动自主执行，Agent 持续工作直到目标达成 |
+| 看工作流模式 | [`superpowers/specs/2026-06-25-workflow-mode.md`](superpowers/specs/2026-06-25-workflow-mode.md) | ⭐ **当前最新**：需求→设计→编码→验收结构化工作流 |
 | 看待办和未来规划 | [`TODO.md`](TODO.md) | 已完成、暂缓和未来规划；不是架构权威来源 |
 | ~~看 task ReAct 架构~~ | [~~旧版文档~~](superpowers/specs/2026-06-04-task-react-architecture.md) | ⚠️ 已过时（基于 `flow/agent/react`，已被 `adk.ChatModelAgent` 替代），保留供历史参考
 

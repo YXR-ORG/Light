@@ -38,7 +38,8 @@ func shouldRollbackTaskContent(content string, hasToolCall bool) bool {
 // taskSystemPrompt 构建 task 模式的 system prompt。
 // planEnabled 为 true 时注入 plan 指令（复杂任务先列计划）。
 // goal 非空时注入 goal 模式指令（持续执行直到目标达成，调用 finish_goal 结束）。
-func taskSystemPrompt(workDir string, planEnabled bool, goal string) string {
+// workflow 非空时注入工作流模式指令（5 阶段结构化流程），替代 goal 指令。
+func taskSystemPrompt(workDir string, planEnabled bool, goal, workflow string) string {
 	planHeader := ""
 	planSection := ""
 	planWorkflow := "1. 收到任务 → 直接调工具（不要先说话）"
@@ -56,10 +57,42 @@ func taskSystemPrompt(workDir string, planEnabled bool, goal string) string {
 		planWorkflow = "1. 收到任务 → **先调 update_plan 列出计划** → 再执行第一步工具"
 	}
 
-	// goal 模式注入
-	goalSection := ""
-	if goal != "" {
-		goalSection = fmt.Sprintf(`
+	// 工作流模式注入（优先于 goal，二者互斥）
+	modeSection := ""
+	if workflow != "" {
+		modeSection = fmt.Sprintf(`
+### %d. 结构化工作流模式（已开启）
+你正在执行一个结构化开发工作流，用户需求如下：
+> %s
+
+**必须按以下 5 个阶段顺序执行，不可跳过任何阶段：**
+
+1. **【需求分析】** 你的第一个工具调用必须是 **submit_spec**，明确需求描述和验收标准
+   - 需求描述：用户想要什么、解决什么问题
+   - 验收标准：可检查的具体条件，每条应能明确判断是否满足（至少 2 条）
+
+2. **【方案设计】** submit_spec 之后，直接输出技术设计方案
+   - 架构思路、技术选型、关键实现路径
+   - 用你自己的话组织，不要调工具——这是你的设计思考
+
+3. **【执行计划】** 调用 **update_plan** 列出编码步骤
+   - 步骤要具体可执行，覆盖设计方案中的所有实现点
+
+4. **【编码实现】** 使用 bash_exec / write_file 等工具逐步实现
+   - 每完成一步，更新 update_plan 状态
+   - 普通命令无需用户确认即可执行，但极危险命令仍需确认
+
+5. **【完成确认】** 所有验收标准满足后，调用 **finish_goal** 结束任务
+   - summary 中总结你做了什么、达成了哪些验收标准
+   - 系统会自动发起验收审查，对照你的验收标准逐项检查
+
+**关键约束：**
+- 验收标准是你的硬性指标，必须全部达成
+- 不要在验收标准未满足时提前调用 finish_goal
+- 遇到障碍尝试不同方案自行解决，不要停下来问用户
+`, planSectionNum(planEnabled), workflow)
+	} else if goal != "" {
+		modeSection = fmt.Sprintf(`
 ### %d. 目标驱动模式（已开启）
 - 你正在为一个明确的目标工作，请持续执行直到目标**完全达成**：
   > %s
@@ -130,7 +163,7 @@ func taskSystemPrompt(workDir string, planEnabled bool, goal string) string {
 3. 信息充分后 → 输出简明总结
 
 记住：**你不是一个只会说话的助手，你是一个能动手的智能体。用工具证明你的能力。**
-`, planHeader, workDir, time.Now().Format("2006-01-02 15:04"), planSection, goalSection, planWorkflow)
+`, planHeader, workDir, time.Now().Format("2006-01-02 15:04"), planSection, modeSection, planWorkflow)
 }
 
 // planSectionNum 返回 plan 节在 system prompt 中的编号（plan 开启时为 7，goal 节紧随其后）。
@@ -158,7 +191,9 @@ func appendTaskPlanInstruction(msg *schema.Message) {
 // tools 必须全部实现 tool.BaseTool（InvokableTool）。
 // bashTool 引用用于 Confirm 回调注入。
 // goal 非空时启用 goal 模式（持续执行直到 finish_goal 调用）。
+// workflow 非空时启用工作流模式（5 阶段结构化流程，内含 goal 逻辑）。
 // finishGoalTool 引用用于检测 agent 是否调用了 finish_goal（可为 nil）。
+// specTool 引用用于工作流模式的需求规格追踪（可为 nil）。
 func RunTaskAgent(
 	ctx context.Context,
 	llm model.ToolCallingChatModel,
@@ -169,8 +204,9 @@ func RunTaskAgent(
 	userMsg string,
 	userInput *schema.Message,
 	planEnabled bool,
-	goal string,
+	goal, workflow string,
 	finishGoalTool *FinishGoalTool,
+	specTool *SpecTool,
 ) (<-chan TaskStep, error) {
 	if llm == nil {
 		return nil, fmt.Errorf("task agent: LLM 未配置")
@@ -202,7 +238,7 @@ func RunTaskAgent(
 	}
 
 	// System prompt 作为 agent Instruction（替代旧版 react.NewPersonaModifier）
-	sysPrompt := taskSystemPrompt(workDir, planEnabled, goal)
+	sysPrompt := taskSystemPrompt(workDir, planEnabled, goal, workflow)
 
 	// 构造压缩中间件链（reduction + summarization）
 	// 两层防线：先机械裁剪大工具输出（零 LLM 成本），再 LLM 语义压缩长对话
@@ -231,7 +267,7 @@ func RunTaskAgent(
 	if userInput == nil {
 		userInput = &schema.Message{Role: schema.User, Content: userMsg}
 	}
-	if planEnabled {
+	if planEnabled || specTool != nil {
 		appendTaskPlanInstruction(userInput)
 	}
 	msgs = append(msgs, userInput)
@@ -430,10 +466,19 @@ func RunTaskAgent(
 		wasLoop := loopDetected
 		loopMu.Unlock()
 
-		// 情况 0：goal 模式 — agent 调用了 finish_goal → 直接完成
+		// 情况 0：goal/workflow 模式 — agent 调用了 finish_goal → 完成前可能发起 review 轮次
 		if goalFinished && finishGoalTool != nil {
+			// workflow 模式：finish_goal 后发起独立 review 轮次
+			if specTool != nil && specTool.HasSpec() && finishGoalTool.GetSuccess() {
+				ch <- TaskStep{Type: "notice", Content: "🔍 正在进行验收审查..."}
+				runReviewRound(ctx, llm, specTool, msgsForSummary, ch)
+			}
 			if finishGoalTool.GetSuccess() {
-				ch <- TaskStep{Type: "notice", Content: "✅ 目标已达成！\n\n" + finishGoalTool.GetSummary()}
+				notice := "✅ 目标已达成！\n\n" + finishGoalTool.GetSummary()
+				if specTool != nil {
+					notice = "✅ 工作流已完成！\n\n" + finishGoalTool.GetSummary()
+				}
+				ch <- TaskStep{Type: "notice", Content: notice}
 			} else {
 				ch <- TaskStep{Type: "notice", Content: "⚠️ 目标未达成：\n\n" + finishGoalTool.GetSummary()}
 			}
@@ -541,6 +586,172 @@ func runSummaryRound(
 		}
 	}
 	return produced
+}
+
+// runReviewRound 在工作流模式下 finish_goal 后发起独立验收审查轮次。
+// 仿 runSummaryRound 结构：构建 review 请求 → 不绑定工具 → Stream 输出验收报告。
+// specTool 提供需求描述和验收标准，collected 是编码阶段的过程消息。
+// 审查结果以 review artifact + content step 推送给前端。
+func runReviewRound(
+	ctx context.Context,
+	llm model.ToolCallingChatModel,
+	specTool *SpecTool,
+	collected []*schema.Message,
+	ch chan<- TaskStep,
+) bool {
+	requirement := specTool.GetRequirement()
+	criteria := specTool.GetAcceptanceCriteria()
+	if requirement == "" || len(criteria) == 0 {
+		return false
+	}
+
+	// 构建 review 请求：验收审查员 system prompt + 需求 + 验收标准 + 过程消息 + 审查指令
+	var criteriaText strings.Builder
+	for i, c := range criteria {
+		fmt.Fprintf(&criteriaText, "%d. %s\n", i+1, c.Content)
+	}
+
+	sysPrompt := fmt.Sprintf(`你是验收审查员。你的任务是对照需求规格和验收标准，审查 Agent 的实现是否真正满足要求。
+
+## 需求规格
+%s
+
+## 验收标准
+%s
+
+## 审查要求
+1. 逐条检查每个验收标准，判断 Agent 的实现是否满足
+2. 对每条给出明确结论：pass（满足）或 fail（不满足）
+3. fail 的条目必须说明原因：缺了什么、哪里不对
+4. 最后给出总体结论：全部通过 / 部分通过 / 未通过
+5. 审查要客观严格——不要因为"看起来差不多"就 pass，要看实际实现`, requirement, criteriaText.String())
+
+	msgs := make([]*schema.Message, 0, len(collected)+3)
+	msgs = append(msgs, schema.SystemMessage(sysPrompt))
+	msgs = append(msgs, &schema.Message{Role: schema.User, Content: "以下是 Agent 的完整执行过程，请据此审查验收标准的达成情况。"})
+	// 仅保留有内容的 assistant 消息（去掉 tool_call 配对，避免 API 校验问题）
+	for _, m := range collected {
+		if m == nil {
+			continue
+		}
+		if m.Role == schema.Assistant && m.Content != "" {
+			msgs = append(msgs, schema.AssistantMessage(m.Content, nil))
+		} else if m.Role == schema.Tool && m.Content != "" {
+			msgs = append(msgs, schema.AssistantMessage("【工具结果】"+truncateRunes(m.Content, 2000), nil))
+		}
+	}
+	msgs = append(msgs, &schema.Message{
+		Role: schema.User,
+		Content: "请逐条审查以上验收标准，给出每条的 pass/fail 结论和总体评审结果。用以下格式输出：\n\n" +
+			"## 验收审查报告\n\n### 逐项审查\n- [pass/fail] 验收标准1：审查说明\n- [pass/fail] 验收标准2：审查说明\n...\n\n### 总体结论\n全部通过/部分通过/未通过：总结说明",
+	})
+
+	// 不绑定工具，直接 Stream
+	sr, err := llm.Stream(ctx, msgs)
+	if err != nil {
+		slog.Warn("TaskAgent review round failed", "error", err)
+		return false
+	}
+	defer sr.Close()
+
+	// 收集完整 review 文本，结束后解析为 review artifact
+	var reviewText strings.Builder
+	for {
+		chunk, err := sr.Recv()
+		if err != nil {
+			break
+		}
+		if chunk == nil {
+			continue
+		}
+		if chunk.ReasoningContent != "" {
+			ch <- TaskStep{Type: "thinking", Content: chunk.ReasoningContent}
+		}
+		if chunk.Content != "" {
+			c := sanitizeContent(chunk.Content)
+			reviewText.WriteString(c)
+			ch <- TaskStep{Type: "content", Content: c}
+		}
+	}
+
+	// 解析 review 文本，构建 review artifact
+	reviewArtifact := buildReviewArtifact(reviewText.String(), criteria)
+	if reviewArtifact.Type != "" {
+		ch <- TaskStep{Type: "tool_result", ToolName: "review_acceptance", ToolResult: EmbedArtifact("验收审查完成", reviewArtifact)}
+	}
+	return reviewText.Len() > 0
+}
+
+// buildReviewArtifact 从 review 文本中解析验收结果，构建 review 产物。
+// 解析规则：每行 [pass] / [fail] / ✓ / ✗ 标记，匹配到对应验收标准项。
+func buildReviewArtifact(reviewText string, criteria []AcceptItem) Artifact {
+	if len(criteria) == 0 {
+		return Artifact{}
+	}
+
+	// 简单解析：对每个验收标准，在 review 文本中搜索 pass/fail 标记
+	items := make([]AcceptItem, len(criteria))
+	for i, c := range criteria {
+		items[i] = AcceptItem{
+			Content: c.Content,
+			Status:  parseReviewStatus(reviewText, i, c.Content),
+		}
+	}
+
+	passCount := 0
+	for _, item := range items {
+		if item.Status == "pass" {
+			passCount++
+		}
+	}
+
+	summary := fmt.Sprintf("验收标准 %d 条，通过 %d 条", len(items), passCount)
+	if passCount == len(items) {
+		summary += "（全部通过）"
+	}
+
+	return Artifact{
+		Type:               "review",
+		Title:              "验收报告",
+		Requirement:        "",
+		AcceptanceCriteria: items,
+		ReviewSummary:      summary,
+	}
+}
+
+// parseReviewStatus 从 review 文本中判断第 idx 条验收标准的状态。
+// 策略：在该条验收标准内容附近搜索 pass/fail/✓/✗ 标记。
+func parseReviewStatus(reviewText string, idx int, criterion string) string {
+	lower := strings.ToLower(reviewText)
+	// 查找验收标准内容出现的位置
+	pos := strings.Index(lower, strings.ToLower(criterion))
+	if pos < 0 {
+		// 找不到原文，按序号搜索 "1." "2." 等标记附近
+		pos = strings.Index(lower, fmt.Sprintf("%d.", idx+1))
+	}
+	if pos < 0 {
+		return "pending"
+	}
+
+	// 在该位置前后 200 字符内搜索 pass/fail 标记
+	start := pos - 200
+	if start < 0 {
+		start = 0
+	}
+	end := pos + len(criterion) + 200
+	if end > len(lower) {
+		end = len(lower)
+	}
+	window := lower[start:end]
+
+	// fail 优先判断（避免 "not pass" 误判为 pass）
+	if strings.Contains(window, "fail") || strings.Contains(window, "✗") || strings.Contains(window, "[x]") || strings.Contains(window, "❌") {
+		return "fail"
+	}
+	if strings.Contains(window, "pass") || strings.Contains(window, "✓") || strings.Contains(window, "[v]") || strings.Contains(window, "✅") {
+		return "pass"
+	}
+	return "pending"
 }
 
 // truncateRunes 按 rune 截断字符串。
