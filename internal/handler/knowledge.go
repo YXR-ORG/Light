@@ -91,6 +91,38 @@ func (h *KnowledgeHandler) GetDocumentStatus(kbID, docID string) (string, error)
 	return s.GetDocumentStatus(docID)
 }
 
+// ListSynonyms 列出知识库的同义词映射表
+func (h *KnowledgeHandler) ListSynonyms(kbID string) ([]kb.Synonym, error) {
+	s, err := kb.GetStore(kbID, kbDir(kbID))
+	if err != nil {
+		return nil, err
+	}
+	return s.ListSynonyms()
+}
+
+// AddSynonym 新增同义词映射（口语词/别名 → 标准术语）
+func (h *KnowledgeHandler) AddSynonym(kbID, source, target string) error {
+	source = strings.TrimSpace(source)
+	target = strings.TrimSpace(target)
+	if source == "" || target == "" {
+		return fmt.Errorf("口语词和标准词都不能为空")
+	}
+	s, err := kb.GetStore(kbID, kbDir(kbID))
+	if err != nil {
+		return err
+	}
+	return s.AddSynonym(source, target)
+}
+
+// DeleteSynonym 删除同义词映射
+func (h *KnowledgeHandler) DeleteSynonym(kbID string, id int64) error {
+	s, err := kb.GetStore(kbID, kbDir(kbID))
+	if err != nil {
+		return err
+	}
+	return s.DeleteSynonym(id)
+}
+
 // DeleteDocument 删除文档（含原始文件和所有 chunks）
 func (h *KnowledgeHandler) DeleteDocument(kbID, docID string) error {
 	s, err := kb.GetStore(kbID, kbDir(kbID))

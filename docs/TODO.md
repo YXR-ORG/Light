@@ -1,6 +1,6 @@
 # TODO 列表
 
-> 最后更新：2026-06-05
+> 最后更新：2026-06-29
 > 文档定位：规划与状态跟踪，不是当前架构事实的唯一来源。当前权威规格见 [`SPECS.md`](SPECS.md)，文档入口见 [`README.md`](README.md)。
 
 所有待办、进行中、已完成的功能规划统一在此维护。
@@ -65,6 +65,21 @@
 - `entities` 表 + `relations` 表，SQLite 邻接表存储，无需图数据库
 - 跨文档关联靠实体名字符串自动匹配，不做复杂消歧
 - 检索前置图谱预处理：识别问题实体 → 图查询扩展 → 定向 chunk 检索
+
+---
+
+### ✅ TODO-KB-5：查询预处理 + 同义词归一化（已完成 v2.0.0）
+
+**问题**：`Search()` 入口对用户 query 零预处理，口语噪音稀释核心语义；最致命的是"同义不同字"（用户口语 vs 文档标准术语）导致四路检索全 miss。且项目无中文分词，trigram 靠 3 字符滑窗硬匹配。
+
+**实现**（详见 [KNOWLEDGE_QUERY_PREPROCESS.md](KNOWLEDGE_QUERY_PREPROCESS.md)）：
+- 引入 `go-ego/gse` 纯 Go 中文分词（仅 query 侧，不碰文档索引）
+- `ExpandQuery`：停用词清洗 → 分词 → 同义词归一化，支持多 token 短语匹配
+- 每个 kb.db 新增 `synonyms` 表，用户在知识库详情页配置「口语词→标准词」映射
+- 向量检索用原 query（保语义），FTS5/摘要用归一化 query（精准匹配），分工互补
+- **关键缺陷修复**：`SearchWithExpansion` 把归一化信息（mappings + note）透传给 LLM，三处 system prompt 强化引导，避免"检索层归一化但 LLM 不知情导致拒绝作答"
+
+**遗留**：同义词表需用户手工维护（未来可从检索失败日志自动学习/LLM 自动抽取候选）。
 
 ---
 

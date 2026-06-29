@@ -4,17 +4,23 @@ import {storage} from '../models';
 import {kb} from '../models';
 import {context} from '../models';
 
+export function AddSynonym(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function CreateKnowledgeBase(arg1:string,arg2:string):Promise<storage.KnowledgeBase>;
 
 export function DeleteDocument(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteKnowledgeBase(arg1:string):Promise<void>;
 
+export function DeleteSynonym(arg1:string,arg2:number):Promise<void>;
+
 export function GetDocumentStatus(arg1:string,arg2:string):Promise<string>;
 
 export function ListDocuments(arg1:string):Promise<Array<kb.KBDocument>>;
 
 export function ListKnowledgeBases():Promise<Array<storage.KnowledgeBase>>;
+
+export function ListSynonyms(arg1:string):Promise<Array<kb.Synonym>>;
 
 export function PickAndUploadDocuments(arg1:string):Promise<Array<kb.KBDocument>>;
 

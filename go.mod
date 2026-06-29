@@ -8,6 +8,7 @@ require (
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/cloudwego/eino-ext/components/tool/mcp v0.0.8
 	github.com/dslipak/pdf v0.0.2
+	github.com/go-ego/gse v1.0.2
 	github.com/google/uuid v1.6.0
 	github.com/knights-analytics/hugot v0.7.4
 	github.com/mark3labs/mcp-go v0.54.1
@@ -112,6 +113,7 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
+	github.com/vcaesar/cedar v0.30.0 // indirect
 	github.com/viant/afs v1.30.0 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect

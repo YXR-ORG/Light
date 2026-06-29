@@ -91,6 +91,39 @@
           </button>
         </div>
       </div>
+
+      <!-- 同义词映射：用户口语词 → 文档标准术语，提升"库里有答案但搜不到"的召回 -->
+      <div class="syn-section">
+        <button class="syn-toggle" @click="showSynonyms = !showSynonyms">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" :style="{ transform: showSynonyms ? 'rotate(90deg)' : '' }"><polyline points="9 18 15 12 9 6"/></svg>
+          <span>同义词映射</span>
+          <span class="syn-count" v-if="synonyms.length > 0">{{ synonyms.length }}</span>
+        </button>
+
+        <div v-if="showSynonyms" class="syn-body">
+          <p class="syn-hint">把用户常用的口语/别名映射到文档里的标准术语，解决"库里有答案但搜不到"。例如「爬高干活 → 高处作业」。</p>
+
+          <div class="syn-add-form">
+            <input v-model="newSynSource" class="kb-input syn-input" placeholder="口语词（如 爬高干活）" maxlength="64" @keydown.enter="addSynonym" />
+            <span class="syn-arrow">→</span>
+            <input v-model="newSynTarget" class="kb-input syn-input" placeholder="标准词（如 高处作业）" maxlength="64" @keydown.enter="addSynonym" />
+            <button class="btn-primary syn-add-btn" :disabled="!newSynSource.trim() || !newSynTarget.trim()" @click="addSynonym">添加</button>
+          </div>
+          <p v-if="synError" class="kb-error" style="margin-bottom:8px">{{ synError }}</p>
+
+          <div v-if="synonyms.length === 0" class="syn-empty">暂无同义词映射</div>
+          <div v-else class="syn-list">
+            <div v-for="syn in synonyms" :key="syn.id" class="syn-row">
+              <span class="syn-src">{{ syn.source }}</span>
+              <span class="syn-arrow">→</span>
+              <span class="syn-tgt">{{ syn.target }}</span>
+              <button class="syn-delete" title="删除" @click="deleteSynonym(syn.id, syn.source)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -101,12 +134,14 @@ import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import {
   ListKnowledgeBases, CreateKnowledgeBase, DeleteKnowledgeBase,
   ListDocuments, PickAndUploadDocuments, DeleteDocument, GetDocumentStatus,
-  RebuildIndex
+  RebuildIndex,
+  ListSynonyms, AddSynonym, DeleteSynonym
 } from '../../wailsjs/go/handler/KnowledgeHandler'
 import type { storage, kb } from '../../wailsjs/go/models'
 
 type KB = storage.KnowledgeBase
 type Doc = kb.KBDocument
+type Synonym = kb.Synonym
 
 const kbs = ref<KB[]>([])
 const activeKB = ref<KB | null>(null)
@@ -125,6 +160,13 @@ const rebuildSuccess = ref(true)
 const rebuildCurrent = ref(0)
 const rebuildTotal = ref(0)
 const rebuildPct = ref(0)
+
+// 同义词管理状态
+const synonyms = ref<Synonym[]>([])
+const showSynonyms = ref(false)
+const newSynSource = ref('')
+const newSynTarget = ref('')
+const synError = ref('')
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -183,7 +225,44 @@ async function openKB(kb: KB) {
   activeKB.value = kb
   rebuildMsg.value = ''
   rebuilding.value = false
+  showSynonyms.value = false
   await loadDocs()
+  await loadSynonyms()
+}
+
+async function loadSynonyms() {
+  if (!activeKB.value) return
+  const list = await ListSynonyms(activeKB.value.id).catch(() => [])
+  synonyms.value = list ?? []
+}
+
+async function addSynonym() {
+  if (!activeKB.value) return
+  synError.value = ''
+  const src = newSynSource.value.trim()
+  const tgt = newSynTarget.value.trim()
+  if (!src || !tgt) {
+    synError.value = '口语词和标准词都需填写'
+    return
+  }
+  const err = await AddSynonym(activeKB.value.id, src, tgt).catch((e: any) => String(e))
+  if (err) {
+    synError.value = String(err)
+    return
+  }
+  newSynSource.value = ''
+  newSynTarget.value = ''
+  await loadSynonyms()
+}
+
+async function deleteSynonym(id: number, source: string) {
+  if (!activeKB.value) return
+  const err = await DeleteSynonym(activeKB.value.id, id).catch((e: any) => {
+    synError.value = '删除失败：' + String(e)
+    return e
+  })
+  if (err) return
+  await loadSynonyms()
 }
 
 async function loadDocs() {
@@ -320,4 +399,26 @@ function formatSize(bytes: number) {
 .rebuild-status { font-size: var(--text-xs); color: var(--color-text-2); }
 .text-success { color: var(--color-success); }
 .text-error { color: oklch(0.55 0.18 25); }
+
+/* 同义词映射 */
+.syn-section { margin-top: var(--space-3); border-top: 1px solid var(--color-border); padding-top: var(--space-3); }
+.syn-toggle { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) 0; border: none; background: transparent; color: var(--color-text-2); cursor: pointer; font-size: var(--text-sm); font-family: inherit; border-radius: var(--radius-sm); }
+.syn-toggle:hover { color: var(--color-text); }
+.syn-toggle svg { transition: transform var(--duration-fast); flex-shrink: 0; }
+.syn-count { font-size: var(--text-xs); color: var(--color-text-3); background: var(--color-paper-2); padding: 0 6px; border-radius: 8px; }
+.syn-body { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) 0 0; }
+.syn-hint { font-size: var(--text-xs); color: var(--color-text-3); margin: 0; line-height: 1.5; }
+.syn-add-form { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.syn-input { flex: 1; min-width: 120px; }
+.syn-arrow { color: var(--color-text-3); font-size: var(--text-sm); flex-shrink: 0; }
+.syn-add-btn { flex-shrink: 0; }
+.syn-empty { font-size: var(--text-xs); color: var(--color-text-3); padding: var(--space-2) 0; }
+.syn-list { display: flex; flex-direction: column; gap: 2px; max-height: 200px; overflow-y: auto; }
+.syn-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); }
+.syn-row:hover { background: var(--color-paper-2); }
+.syn-src { font-size: var(--text-xs); color: var(--color-text-2); }
+.syn-tgt { font-size: var(--text-xs); color: var(--color-text); font-weight: 500; }
+.syn-delete { margin-left: auto; padding: 2px; border: none; background: transparent; color: var(--color-text-3); cursor: pointer; border-radius: var(--radius-sm); opacity: 0; transition: opacity var(--duration-fast); }
+.syn-row:hover .syn-delete { opacity: 1; }
+.syn-delete:hover { color: oklch(0.55 0.18 25); }
 </style>

@@ -124,6 +124,14 @@ func (s *Store) migrate() error {
   key_entities TEXT DEFAULT '[]',  -- JSON 数组，如 ["张嘎","奶奶","鬼子"]
   created_at   DATETIME
 )`,
+		// 同义词表：用户口语词/别名 → 文档标准术语，用于检索前 query 归一化。
+		// 每个知识库独立维护（领域相关），解决"库里有答案但搜不到"的同义不同字问题。
+		`CREATE TABLE IF NOT EXISTS synonyms (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  source     TEXT NOT NULL UNIQUE,  -- 口语词，如 "爬高干活"
+  target     TEXT NOT NULL,         -- 标准词，如 "高处作业"
+  created_at DATETIME
+)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -354,15 +362,28 @@ func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 		topK = 20
 	}
 
+	// --- 阶段零：query 预处理（停用词清洗 + 分词 + 同义词归一化）---
+	// 归一化后的 query 供 FTS5/摘要检索（字面匹配需标准术语）；
+	// 向量检索仍用原始 query（保持语义完整性，分工互补）。
+	expanded := s.ExpandQuery(query)
+	retrievalQuery := expanded.Cleaned
+	if strings.TrimSpace(retrievalQuery) == "" {
+		retrievalQuery = query // 清洗后为空则回退原 query
+	}
+	if retrievalQuery != query || expanded.HasSynonym {
+		slog.Debug("kbstore: query expanded",
+			"orig", query, "expanded", retrievalQuery, "synonym_hit", expanded.HasSynonym)
+	}
+
 	// --- 阶段一：摘要层定位相关文档 ---
 	var docFilter map[string]bool
-	summaries, err := s.SearchSummaries(query)
+	summaries, err := s.SearchSummaries(retrievalQuery)
 	if err == nil && len(summaries) > 0 {
 		docFilter = make(map[string]bool, len(summaries))
 		for _, ds := range summaries {
 			docFilter[ds.DocName] = true
 		}
-		slog.Debug("kbstore: summary filter", "query", query, "docs", len(docFilter))
+		slog.Debug("kbstore: summary filter", "query", retrievalQuery, "docs", len(docFilter))
 	}
 
 	// rrfScores: content → 累计 RRF 分数
@@ -384,14 +405,14 @@ func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 		}
 	}
 
-	// --- 路径1：FTS5 AND（精度高）---
-	andQuery, orQuery, shortTerms := buildFTS5Query(query)
+	// --- 路径1：FTS5 AND（精度高，用归一化后 query）---
+	andQuery, orQuery, shortTerms := buildFTS5Query(retrievalQuery)
 	if andQuery != "" {
 		r, _ := s.doSearch(andQuery, topK*2)
 		addRanked(r)
 	}
 
-	// --- 路径2：向量检索（语义）---
+	// --- 路径2：向量检索（语义，用【原始 query】保持语义完整性）---
 	vecResults, vecErr := s.VectorSearch(query, topK*2)
 	if vecErr != nil {
 		slog.Debug("vector search unavailable", "error", vecErr)
@@ -403,7 +424,7 @@ func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 		addRanked(sr)
 	}
 
-	// --- 路径3：FTS5 OR（召回补充）---
+	// --- 路径3：FTS5 OR（召回补充，用归一化后 query）---
 	if orQuery != "" && orQuery != andQuery {
 		r, _ := s.doSearch(orQuery, topK*2)
 		addRanked(r)
@@ -436,9 +457,50 @@ func (s *Store) Search(query string, topK int) ([]SearchResult, error) {
 		results[i] = s.r
 	}
 
-	slog.Info("kbstore: search", "query", query, "results", len(results),
-		"summary_filter", len(docFilter), "vec_available", vecErr == nil)
+	slog.Info("kbstore: search", "query", query, "retrieval_query", retrievalQuery,
+		"results", len(results), "summary_filter", len(docFilter), "vec_available", vecErr == nil)
 	return results, nil
+}
+
+// SearchResultWithExpansion 带归一化信息的检索结果。
+// 把"原始 query 如何被改写"透传给调用方（LLM），避免检索层做了同义词归一化
+// 但生成层不知情，导致 LLM 误判"库里没有这个词"。
+type SearchResultWithExpansion struct {
+	Results          []SearchResult `json:"results"`
+	Total            int            `json:"total"`
+	OriginalQuery    string         `json:"original_query"`    // 用户/LLM 原始 query
+	RetrievalQuery   string         `json:"retrieval_query"`   // 实际用于检索的归一化后 query
+	SynonymMappings  []SynonymPair  `json:"synonym_mappings"`  // 命中的同义词映射（空则无）
+}
+
+// SynonymPair 单条同义词映射（命中时透传给 LLM）。
+type SynonymPair struct {
+	Source string `json:"source"` // 口语词/别名
+	Target string `json:"target"` // 标准词
+}
+
+// SearchWithExpansion 检索并返回归一化信息（供 LLM 工具调用）。
+// 把"原始 query 如何被同义词归一化"透传给 LLM，避免检索层做了归一化
+// 但生成层不知情，导致 LLM 误判"库里没有这个词"。
+func (s *Store) SearchWithExpansion(query string, topK int) (*SearchResultWithExpansion, error) {
+	results, err := s.Search(query, topK)
+	if err != nil {
+		return nil, err
+	}
+
+	expanded := s.ExpandQuery(query) // 走缓存，开销可忽略
+	retrievalQuery := expanded.Cleaned
+	if strings.TrimSpace(retrievalQuery) == "" {
+		retrievalQuery = query
+	}
+
+	return &SearchResultWithExpansion{
+		Results:         results,
+		Total:           len(results),
+		OriginalQuery:   query,
+		RetrievalQuery:  retrievalQuery,
+		SynonymMappings: expanded.Mappings,
+	}, nil
 }
 
 func (s *Store) doSearch(ftsQuery string, topK int) ([]SearchResult, error) {

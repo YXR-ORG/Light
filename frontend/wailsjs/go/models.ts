@@ -185,6 +185,24 @@ export namespace kb {
 	        this.created_at = source["created_at"];
 	    }
 	}
+	export class Synonym {
+	    id: number;
+	    source: string;
+	    target: string;
+	    created_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Synonym(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.source = source["source"];
+	        this.target = source["target"];
+	        this.created_at = source["created_at"];
+	    }
+	}
 
 }
 
