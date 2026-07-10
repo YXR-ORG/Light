@@ -72,12 +72,15 @@ type SendMessageResponse struct {
 }
 
 type StreamChunk struct {
-	ConvID   string `json:"conv_id,omitempty"`
-	Content  string `json:"content"`
-	Thinking string `json:"thinking,omitempty"`
-	Done     bool   `json:"done"`
-	Error    string `json:"error,omitempty"`
-}
+		ConvID           string `json:"conv_id,omitempty"`
+		Content          string `json:"content"`
+		Thinking         string `json:"thinking,omitempty"`
+		Done             bool   `json:"done"`
+		Error            string `json:"error,omitempty"`
+		PromptTokens     int    `json:"prompt_tokens,omitempty"`
+		CompletionTokens int    `json:"completion_tokens,omitempty"`
+		TotalTokens      int    `json:"total_tokens,omitempty"`
+	}
 
 func (h *ChatHandler) CancelStream() {
 	h.cancelMu.Lock()
@@ -432,27 +435,40 @@ func (h *ChatHandler) StreamChat(req SendMessageRequest) error {
 		}
 	}
 
-	fullContent, fullThinking := h.runToolLoop(ctx, req.ConversationID, einoMsgs)
+fullContent, fullThinking, tokens := h.runToolLoop(ctx, req.ConversationID, einoMsgs)
 
-	// 只有非空回复才存库
-	if fullContent != "" {
-		if isRegenerate {
-			// 重新生成：查当前 group 的最大 gen_index，+1 追加新版本
-			var maxIdx int
-			storage.DB.Model(&storage.Message{}).
-				Where("conversation_id = ? AND generation_group_id = ?", req.ConversationID, req.RegenerateGroupID).
-				Select("COALESCE(MAX(gen_index), 0)").Scan(&maxIdx)
-			if _, err := storage.SaveRegeneratedMessage(req.ConversationID, fullContent, fullThinking, req.RegenerateGroupID, maxIdx+1); err != nil {
-				slog.Error("StreamChat save regenerated message failed", "error", err)
+		// 只有非空回复才存库
+		if fullContent != "" {
+			mode := req.Mode
+			if mode == "" {
+				mode = "chat"
+			}
+			var msg *storage.Message
+			var err error
+			if isRegenerate {
+				// 重新生成：查当前 group 的最大 gen_index，+1 追加新版本
+				var maxIdx int
+				storage.DB.Model(&storage.Message{}).
+					Where("conversation_id = ? AND generation_group_id = ?", req.ConversationID, req.RegenerateGroupID).
+					Select("COALESCE(MAX(gen_index), 0)").Scan(&maxIdx)
+				msg, err = storage.SaveRegeneratedMessageWithTokens(req.ConversationID, fullContent, fullThinking, req.RegenerateGroupID, maxIdx+1, tokens)
+				if err != nil {
+					slog.Error("StreamChat save regenerated message failed", "error", err)
+				}
+			} else {
+				msg, err = storage.SaveMessageWithTokens(req.ConversationID, "assistant", fullContent, fullThinking, "", "", "", "", tokens)
+				if err != nil {
+					slog.Error("StreamChat save assistant message failed", "error", err)
+				}
+			}
+			if msg != nil && !tokens.Empty() {
+				if err := storage.SaveTokenUsage(req.ConversationID, msg.ID, req.Provider, req.Model, mode, tokens); err != nil {
+					slog.Warn("StreamChat save token usage failed", "error", err)
+				}
 			}
 		} else {
-			if _, err := storage.SaveMessage(req.ConversationID, "assistant", fullContent, fullThinking, "", "", "", ""); err != nil {
-				slog.Error("StreamChat save assistant message failed", "error", err)
-			}
+			slog.Warn("StreamChat: empty fullContent, skipping save", "conv_id", req.ConversationID)
 		}
-	} else {
-		slog.Warn("StreamChat: empty fullContent, skipping save", "conv_id", req.ConversationID)
-	}
 
 	// Auto-generate title for the first message asynchronously
 	if isFirstMessage && req.Content != "" {
@@ -589,88 +605,106 @@ func historyToEinoMsg(m storage.Message) *schema.Message {
 	return msg
 }
 
-func (h *ChatHandler) runToolLoop(ctx context.Context, convID string, messages []*schema.Message) (string, string) {
-	fullContent := ""
-	fullThinking := ""
+func (h *ChatHandler) runToolLoop(ctx context.Context, convID string, messages []*schema.Message) (string, string, storage.TokenSnapshot) {
+		fullContent := ""
+		fullThinking := ""
+		var tokens storage.TokenSnapshot
 
-	for loopCount := 0; loopCount < maxToolLoops; loopCount++ {
-		stream, err := h.chat.Stream(ctx, messages)
-		if err != nil {
-			slog.Error("StreamChat stream failed", "error", err)
-			runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Done: true, Error: err.Error()})
-			return fullContent, fullThinking
-		}
+		for loopCount := 0; loopCount < maxToolLoops; loopCount++ {
+			stream, err := h.chat.Stream(ctx, messages)
+			if err != nil {
+				slog.Error("StreamChat stream failed", "error", err)
+				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Done: true, Error: err.Error()})
+				return fullContent, fullThinking, tokens
+			}
 
-		var chunks []*schema.Message
-		chunkContent := ""
+			var chunks []*schema.Message
+			chunkContent := ""
+			var loopPrompt, loopCompletion, loopTotal int
 
-		for {
-			chunk, recvErr := stream.Recv()
-			if recvErr != nil {
+			for {
+				chunk, recvErr := stream.Recv()
+				if recvErr != nil {
+					break
+				}
+				chunks = append(chunks, chunk)
+				if chunk.ReasoningContent != "" {
+					fullThinking += chunk.ReasoningContent
+					runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Thinking: chunk.ReasoningContent})
+				}
+				if chunk.Content != "" {
+					chunkContent += chunk.Content
+					fullContent += chunk.Content
+					runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Content: chunk.Content})
+				}
+				if chunk.ResponseMeta != nil && chunk.ResponseMeta.Usage != nil {
+					u := chunk.ResponseMeta.Usage
+					if u.PromptTokens > loopPrompt {
+						loopPrompt = u.PromptTokens
+					}
+					if u.CompletionTokens > loopCompletion {
+						loopCompletion = u.CompletionTokens
+					}
+					if u.TotalTokens > loopTotal {
+						loopTotal = u.TotalTokens
+					}
+				}
+			}
+			stream.Close()
+			tokens.Add(loopPrompt, loopCompletion, loopTotal)
+
+			// Merge all streaming chunks into one complete message (handles tool call argument merging)
+			var toolCalls []schema.ToolCall
+			if len(chunks) > 0 {
+				merged, mergeErr := schema.ConcatMessages(chunks)
+				if mergeErr == nil && merged != nil {
+					toolCalls = merged.ToolCalls
+				}
+			}
+
+			slog.Info("runToolLoop iteration", "loop", loopCount, "tool_calls", len(toolCalls), "content_len", len(chunkContent), "tokens", loopTotal)
+
+			if len(toolCalls) == 0 {
+				// LLM 返回了空内容且无 tool call（网络抖动或 API 异常）
+				if len(chunkContent) == 0 && loopCount == 0 {
+					slog.Warn("runToolLoop: empty response from LLM on first iteration")
+					runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID,
+						Content: "（模型返回了空响应，请重试）",
+					})
+				}
 				break
 			}
-			chunks = append(chunks, chunk)
-			if chunk.ReasoningContent != "" {
-				fullThinking += chunk.ReasoningContent
-				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Thinking: chunk.ReasoningContent})
-			}
-			if chunk.Content != "" {
-				chunkContent += chunk.Content
-				fullContent += chunk.Content
-				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Content: chunk.Content})
-			}
-		}
-		stream.Close()
 
-		// Merge all streaming chunks into one complete message (handles tool call argument merging)
-		var toolCalls []schema.ToolCall
-		if len(chunks) > 0 {
-			merged, mergeErr := schema.ConcatMessages(chunks)
-			if mergeErr == nil && merged != nil {
-				toolCalls = merged.ToolCalls
-			}
-		}
+			messages = append(messages, &schema.Message{
+				Role:      schema.Assistant,
+				Content:   chunkContent,
+				ToolCalls: toolCalls,
+			})
 
-		slog.Info("runToolLoop iteration", "loop", loopCount, "tool_calls", len(toolCalls), "content_len", len(chunkContent))
-
-		if len(toolCalls) == 0 {
-			// LLM 返回了空内容且无 tool call（网络抖动或 API 异常）
-			if len(chunkContent) == 0 && loopCount == 0 {
-				slog.Warn("runToolLoop: empty response from LLM on first iteration")
+			for _, tc := range toolCalls {
+				toolName := tc.Function.Name
+				toolArgs := tc.Function.Arguments
+				slog.Info("Calling tool", "name", toolName, "args", toolArgs)
 				runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID,
-					Content: "（模型返回了空响应，请重试）",
+					Content: fmt.Sprintf("\n🔧 调用工具: %s...\n", toolName),
+				})
+				result, toolErr := h.chat.RunTool(ctx, toolName, toolArgs)
+				if toolErr != nil {
+					slog.Warn("Tool call failed", "name", toolName, "error", toolErr)
+					result = fmt.Sprintf("工具调用失败: %v", toolErr)
+				}
+				messages = append(messages, &schema.Message{
+					Role:       schema.Tool,
+					Content:    result,
+					ToolCallID: tc.ID,
 				})
 			}
-			break
+			fullContent = ""
 		}
 
-		messages = append(messages, &schema.Message{
-			Role:      schema.Assistant,
-			Content:   chunkContent,
-			ToolCalls: toolCalls,
+		runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{
+			ConvID: convID, Done: true,
+			PromptTokens: tokens.PromptTokens, CompletionTokens: tokens.CompletionTokens, TotalTokens: tokens.TotalTokens,
 		})
-
-		for _, tc := range toolCalls {
-			toolName := tc.Function.Name
-			toolArgs := tc.Function.Arguments
-			slog.Info("Calling tool", "name", toolName, "args", toolArgs)
-			runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID,
-				Content: fmt.Sprintf("\n🔧 调用工具: %s...\n", toolName),
-			})
-			result, toolErr := h.chat.RunTool(ctx, toolName, toolArgs)
-			if toolErr != nil {
-				slog.Warn("Tool call failed", "name", toolName, "error", toolErr)
-				result = fmt.Sprintf("工具调用失败: %v", toolErr)
-			}
-			messages = append(messages, &schema.Message{
-				Role:       schema.Tool,
-				Content:    result,
-				ToolCallID: tc.ID,
-			})
-		}
-		fullContent = ""
+		return fullContent, fullThinking, tokens
 	}
-
-	runtime.EventsEmit(h.ctx, "chat:chunk", StreamChunk{ConvID: convID, Done: true})
-	return fullContent, fullThinking
-}

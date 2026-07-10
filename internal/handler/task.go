@@ -61,8 +61,10 @@ type StreamTaskRequest struct {
 	RegenerateGroupID string       `json:"regenerate_group_id"`
 	IgnoreContext     bool         `json:"ignore_context"`
 	Attachments       []Attachment `json:"attachments"`
-	Goal              string       `json:"goal"`      // task 模式目标（非空=goal 模式）
-	Workflow          string       `json:"workflow"`  // 工作流模式需求描述（非空=workflow 模式，内含 goal 逻辑）
+	Goal               string       `json:"goal"`                // task 模式目标（非空=goal 模式）
+	Workflow           string       `json:"workflow"`            // 工作流模式需求描述（非空=workflow 模式，内含 goal 逻辑）
+	AcceptanceCriteria string       `json:"acceptance_criteria"` // 验收标准（换行分隔，空=不启用验收）
+	MaxTurns           int          `json:"max_turns"`           // 验收打回轮数上限（0=默认 5）
 }
 
 // StreamTask 启动 task 模式 ReAct Agent，通过 task:step events 推送推理链。
@@ -210,9 +212,10 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	// 更新工作目录到数据库
 	_ = storage.UpdateConversationWorkDir(req.ConversationID, req.WorkDir)
 
-	// 启动 ReAct agent
-	slog.Info("StreamTask: starting RunTaskAgent", "workDir", req.WorkDir, "historyLen", len(einoHistory), "workflow", req.Workflow != "")
-	stepCh, err := eino.RunTaskAgent(ctx, llm, tools, bashTool, req.WorkDir, einoHistory, req.Content, buildUserMessage(req.Content, req.Attachments), planEnabled, req.Goal, req.Workflow, finishGoalTool, specTool)
+// 启动 ReAct agent
+		slog.Info("StreamTask: starting RunTaskAgent", "workDir", req.WorkDir, "historyLen", len(einoHistory),
+			"workflow", req.Workflow != "", "has_criteria", req.AcceptanceCriteria != "", "max_turns", req.MaxTurns)
+		stepCh, err := eino.RunTaskAgent(ctx, llm, tools, bashTool, req.WorkDir, einoHistory, req.Content, buildUserMessage(req.Content, req.Attachments), planEnabled, req.Goal, req.Workflow, req.AcceptanceCriteria, req.MaxTurns, finishGoalTool, specTool)
 	if err != nil {
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{ConvID: req.ConversationID, Type: "error", Error: err.Error()})
 		return err
@@ -221,6 +224,7 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 	// 消费 step channel，转发 task:step events，收集最终回答
 	var finalContent string
 	hadDone := false
+	var tokens storage.TokenSnapshot
 	// 采集本轮产物（文件等），按去重键去重，done 时序列化存库
 	artifactMap := map[string]eino.Artifact{}
 	artifactOrder := []string{}
@@ -289,37 +293,56 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 		}
 		step.ConvID = req.ConversationID
 		slog.Info("StreamTask: step", "type", step.Type, "content_len", len(step.Content))
-		if step.Type == "content" {
-			finalContent += step.Content
-		}
-		if step.Type == "tool_result" {
-			collectArtifact(step.ToolResult)
-		}
-		// content_rollback：本轮 content 实为旁白，从 finalContent 末尾撤回，避免存入 DB 正文
-		if step.Type == "content_rollback" {
-			seg := step.Content
-			if seg != "" && strings.HasSuffix(finalContent, seg) {
-				finalContent = finalContent[:len(finalContent)-len(seg)]
-			} else if seg != "" && len(finalContent) >= len(seg) {
-				finalContent = finalContent[:len(finalContent)-len(seg)]
+if step.Type == "content" {
+				finalContent += step.Content
 			}
-		}
-		if step.Type == "done" {
-			hadDone = true
-			completeLatestPlan()
-			// 先保存 AI 回答到 DB，再发 done 事件，确保前端 loadTaskHistory 能读到数据
-			slog.Info("StreamTask: done received", "finalContent_len", len(finalContent), "convID", req.ConversationID)
-			if finalContent != "" {
-				msgID, err := storage.SaveTaskMessageWithArtifacts(req.ConversationID, "assistant", finalContent, artifactsJSON())
-				if err != nil {
-					slog.Warn("StreamTask: save assistant message failed", "error", err)
-				} else {
-					slog.Info("StreamTask: assistant message saved", "msgID", msgID)
+			// usage 步骤携带本轮增量 token；用 cumulative 字段做会话内进度展示，落库只累加增量
+			if step.Type == "usage" && step.Usage != nil {
+				tokens.Add(step.Usage.PromptTokens, step.Usage.CompletionTokens, step.Usage.TotalTokens)
+			}
+			if step.Type == "tool_result" {
+				collectArtifact(step.ToolResult)
+			}
+			// content_rollback：本轮 content 实为旁白，从 finalContent 末尾撤回，避免存入 DB 正文
+			if step.Type == "content_rollback" {
+				seg := step.Content
+				if seg != "" && strings.HasSuffix(finalContent, seg) {
+					finalContent = finalContent[:len(finalContent)-len(seg)]
+				} else if seg != "" && len(finalContent) >= len(seg) {
+					finalContent = finalContent[:len(finalContent)-len(seg)]
 				}
-			} else {
-				slog.Warn("StreamTask: finalContent is empty, skipping SaveMessage")
 			}
-			runtime.EventsEmit(h.ctx, "task:step", step)
+			if step.Type == "done" {
+				hadDone = true
+				completeLatestPlan()
+				if tokens.Empty() && step.Usage != nil {
+					tokens.Add(step.Usage.PromptTokens, step.Usage.CompletionTokens, step.Usage.TotalTokens)
+				}
+				// 先保存 AI 回答到 DB，再发 done 事件，确保前端 loadTaskHistory 能读到数据
+				slog.Info("StreamTask: done received", "finalContent_len", len(finalContent), "convID", req.ConversationID, "tokens", tokens.TotalTokens)
+				mode := "task"
+				if req.Workflow != "" {
+					mode = "workflow"
+				}
+				if finalContent != "" {
+					msg, err := storage.SaveTaskMessageWithArtifactsAndTokens(req.ConversationID, "assistant", finalContent, artifactsJSON(), tokens)
+					if err != nil {
+						slog.Warn("StreamTask: save assistant message failed", "error", err)
+					} else {
+						slog.Info("StreamTask: assistant message saved", "msgID", msg.ID)
+						if !tokens.Empty() {
+							if err := storage.SaveTokenUsage(req.ConversationID, msg.ID, req.Provider, req.Model, mode, tokens); err != nil {
+								slog.Warn("StreamTask: save token usage failed", "error", err)
+							}
+						}
+					}
+				} else {
+					slog.Warn("StreamTask: finalContent is empty, skipping SaveMessage")
+					if !tokens.Empty() {
+						_ = storage.SaveTokenUsage(req.ConversationID, "", req.Provider, req.Model, mode, tokens)
+					}
+				}
+				runtime.EventsEmit(h.ctx, "task:step", step)
 			// 自动生成标题（会话标题还是默认值时异步生成）
 			if needTitle && req.Content != "" {
 				convID := req.ConversationID
@@ -364,15 +387,22 @@ func (h *TaskHandler) StreamTask(req StreamTaskRequest) error {
 			slog.Info("StreamTask: task cancelled, skip fallback save/done", "convID", req.ConversationID)
 			return nil
 		}
-		slog.Info("StreamTask: agent stopped without done, emitting fallback done", "finalContent_len", len(finalContent), "convID", req.ConversationID)
-		if finalContent != "" {
-			msgID, err := storage.SaveTaskMessageWithArtifacts(req.ConversationID, "assistant", finalContent, artifactsJSON())
-			if err != nil {
-				slog.Warn("StreamTask: save assistant message failed (fallback)", "error", err)
-			} else {
-				slog.Info("StreamTask: assistant message saved (fallback)", "msgID", msgID)
+slog.Info("StreamTask: agent stopped without done, emitting fallback done", "finalContent_len", len(finalContent), "convID", req.ConversationID)
+			mode := "task"
+			if req.Workflow != "" {
+				mode = "workflow"
 			}
-		}
+			if finalContent != "" {
+				msg, err := storage.SaveTaskMessageWithArtifactsAndTokens(req.ConversationID, "assistant", finalContent, artifactsJSON(), tokens)
+				if err != nil {
+					slog.Warn("StreamTask: save assistant message failed (fallback)", "error", err)
+				} else {
+					slog.Info("StreamTask: assistant message saved (fallback)", "msgID", msg.ID)
+					if !tokens.Empty() {
+						_ = storage.SaveTokenUsage(req.ConversationID, msg.ID, req.Provider, req.Model, mode, tokens)
+					}
+				}
+			}
 		runtime.EventsEmit(h.ctx, "task:step", eino.TaskStep{
 			ConvID: req.ConversationID, Type: "done",
 		})

@@ -22,9 +22,11 @@ type Conversation struct {
 	WorkDir         string    `gorm:"type:text;default:''" json:"work_dir"`          // task 模式工作目录
 	ParentConvID    string    `gorm:"size:36;default:''" json:"parent_conv_id"`      // 分叉来源会话 ID（空=原始会话）
 	ForkFromMsgID   string    `gorm:"size:36;default:''" json:"fork_from_msg_id"`    // 分叉来源消息 ID
-	Goal            string    `gorm:"type:text;default:''" json:"goal"`              // task 模式目标（goal 模式，空=普通 task）
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	Goal               string    `gorm:"type:text;default:''" json:"goal"`                  // task 模式目标（goal 模式，空=普通 task）
+	AcceptanceCriteria string    `gorm:"type:text;default:''" json:"acceptance_criteria"`  // 验收标准（换行分隔，空=不启用验收）
+	MaxTurns           int       `gorm:"default:0" json:"max_turns"`                        // 验收打回轮数上限（0=默认 5）
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type Message struct {
@@ -44,7 +46,25 @@ type Message struct {
 	// 重新生成支持：同一 user prompt 的所有 AI 回答共享一个 group id
 	GenerationGroupID string    `gorm:"size:36;default:''" json:"generation_group_id"`
 	GenIndex          int       `gorm:"default:0" json:"gen_index"` // 0=初始，1=第一次重生成，依次递增
+	PromptTokens      int       `gorm:"default:0" json:"prompt_tokens"`
+	CompletionTokens  int       `gorm:"default:0" json:"completion_tokens"`
+	TotalTokens       int       `gorm:"default:0" json:"total_tokens"`
 	CreatedAt         time.Time `json:"created_at"`
+}
+
+// TokenUsage 记录每次 LLM 调用/一轮任务的 token 消耗，便于按天/服务商/模式汇总。
+type TokenUsage struct {
+	ID               string    `gorm:"primaryKey;size:36" json:"id"`
+	ConversationID   string    `gorm:"index;size:36" json:"conversation_id"`
+	MessageID        string    `gorm:"size:36;default:''" json:"message_id"`
+	Provider         string    `gorm:"size:32;default:''" json:"provider"`
+	Model            string    `gorm:"size:64;default:''" json:"model"`
+	Mode             string    `gorm:"size:16;default:''" json:"mode"` // chat|task|workflow|review|evaluator
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	TotalTokens      int       `json:"total_tokens"`
+	EstimatedCost    float64   `json:"estimated_cost"` // 美元估算
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type Setting struct {
@@ -117,6 +137,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&Conversation{}, &Message{}, &Setting{},
 		&MCPServer{}, &LLMProvider{}, &LLMModel{},
 		&Agent{}, &Skill{}, &KnowledgeBase{},
+		&TokenUsage{},
 	)
 }
 

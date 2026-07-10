@@ -10,6 +10,14 @@ export function GetAll() {
   return window['go']['handler']['SettingsHandler']['GetAll']();
 }
 
+export function GetConversationUsage(arg1) {
+  return window['go']['handler']['SettingsHandler']['GetConversationUsage'](arg1);
+}
+
+export function GetUsageStats(arg1) {
+  return window['go']['handler']['SettingsHandler']['GetUsageStats'](arg1);
+}
+
 export function Set(arg1, arg2) {
   return window['go']['handler']['SettingsHandler']['Set'](arg1, arg2);
 }

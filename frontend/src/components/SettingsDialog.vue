@@ -9,7 +9,7 @@ import {
 } from '../../wailsjs/go/handler/ProviderHandler'
 import { ListAgents, SaveAgent, DeleteAgent } from '../../wailsjs/go/handler/AgentHandler'
 import { ListSkills, SaveSkill, ToggleSkill, DeleteSkill, ImportSkillZip } from '../../wailsjs/go/handler/SkillHandler'
-import { Get as GetSetting, Set as SetSetting } from '../../wailsjs/go/handler/SettingsHandler'
+import { Get as GetSetting, Set as SetSetting, GetUsageStats } from '../../wailsjs/go/handler/SettingsHandler'
 import { SelectWorkDir } from '../../wailsjs/go/handler/TaskHandler'
 import { SaveConfig, GetConfig, Backup, ListBackups, Restore, DeleteBackup } from '../../wailsjs/go/handler/BackupHandler'
 import { BrowserOpenURL, EventsEmit } from '../../wailsjs/runtime/runtime'
@@ -18,8 +18,60 @@ import type { storage, handler } from '../../wailsjs/go/models'
 
 const settingsStore = useSettingsStore()
 
-type MainTab = 'providers' | 'agents' | 'skills' | 'mcp' | 'knowledge' | 'general' | 'about'
+type MainTab = 'providers' | 'agents' | 'skills' | 'mcp' | 'knowledge' | 'usage' | 'general' | 'about'
 const mainTab = ref<MainTab>('providers')
+
+// ── 用量统计 ──────────────────────────────────────────────
+type UsageRange = 'today' | 'week' | 'month' | 'all'
+const usageRange = ref<UsageRange>('week')
+const usageLoading = ref(false)
+const usageSummary = ref<storage.UsageSummary | null>(null)
+const usageRangeOptions: { v: UsageRange; l: string }[] = [
+  { v: 'today', l: '今天' },
+  { v: 'week', l: '近 7 天' },
+  { v: 'month', l: '近 30 天' },
+  { v: 'all', l: '全部' },
+]
+
+async function loadUsageStats() {
+  usageLoading.value = true
+  try {
+    usageSummary.value = await GetUsageStats(usageRange.value)
+  } catch {
+    usageSummary.value = null
+  } finally {
+    usageLoading.value = false
+  }
+}
+
+watch(mainTab, (t) => {
+  if (t === 'usage') loadUsageStats()
+})
+watch(usageRange, () => {
+  if (mainTab.value === 'usage') loadUsageStats()
+})
+
+function formatTokens(n: number | undefined | null): string {
+  const v = Number(n || 0)
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(2) + 'M'
+  if (v >= 1_000) return (v / 1_000).toFixed(1) + 'K'
+  return String(v)
+}
+
+function formatCost(n: number | undefined | null): string {
+  const v = Number(n || 0)
+  if (v <= 0) return '$0'
+  if (v < 0.01) return '≈$' + v.toFixed(4)
+  return '≈$' + v.toFixed(2)
+}
+
+function modeLabel(key: string): string {
+  const map: Record<string, string> = {
+    chat: '问答', knowledge: '知识库', task: '任务', workflow: '工作流',
+    review: '审查', evaluator: '验收', unknown: '未知',
+  }
+  return map[key] || key
+}
 
 const PROVIDER_TYPES = [
   { value: 'openai',  label: 'OpenAI 兼容',  placeholder: { key: 'sk-...', url: 'https://api.openai.com/v1' } },
@@ -499,6 +551,10 @@ function formatSize(bytes: number): string {
             <button class="nav-item" :class="{ active: mainTab === 'knowledge' }" @click="mainTab = 'knowledge'">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
               知识库
+            </button>
+            <button class="nav-item" :class="{ active: mainTab === 'usage' }" @click="mainTab = 'usage'">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 3 5-7"/></svg>
+              用量统计
             </button>
             <button class="nav-item" :class="{ active: mainTab === 'about' }" @click="mainTab = 'about'">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -981,6 +1037,79 @@ function formatSize(bytes: number): string {
               <KnowledgeConfig />
             </div>
 
+            <!-- 用量统计 -->
+            <div v-else-if="mainTab === 'usage'" class="usage-panel">
+              <div class="usage-header">
+                <div>
+                  <div class="setting-section-title">用量统计</div>
+                  <div class="setting-section-desc">按时间范围查看 token 消耗与费用估算（费用为内置单价估算，仅供参考）。</div>
+                </div>
+                <div class="usage-range">
+                  <button v-for="r in usageRangeOptions" :key="r.v"
+                    class="usage-range-btn" :class="{ active: usageRange === r.v }"
+                    @click="usageRange = r.v">{{ r.l }}</button>
+                </div>
+              </div>
+
+              <div v-if="usageLoading" class="usage-empty">加载中…</div>
+              <template v-else-if="usageSummary">
+                <div class="usage-cards">
+                  <div class="usage-card">
+                    <div class="usage-card__label">总 Tokens</div>
+                    <div class="usage-card__value">{{ formatTokens(usageSummary.total_tokens) }}</div>
+                    <div class="usage-card__sub">输入 {{ formatTokens(usageSummary.total_prompt_tokens) }} · 输出 {{ formatTokens(usageSummary.total_completion_tokens) }}</div>
+                  </div>
+                  <div class="usage-card">
+                    <div class="usage-card__label">估算费用</div>
+                    <div class="usage-card__value">{{ formatCost(usageSummary.estimated_cost) }}</div>
+                    <div class="usage-card__sub">{{ usageSummary.request_count || 0 }} 次请求</div>
+                  </div>
+                </div>
+
+                <div v-if="(usageSummary.by_day || []).length" class="usage-section">
+                  <div class="usage-section__title">按天</div>
+                  <div class="usage-bars">
+                    <div v-for="d in usageSummary.by_day" :key="d.key" class="usage-bar-row">
+                      <span class="usage-bar-key">{{ d.key.slice(5) }}</span>
+                      <div class="usage-bar-track">
+                        <div class="usage-bar-fill" :style="{ width: Math.max(4, (d.total_tokens / Math.max(1, usageSummary.total_tokens)) * 100) + '%' }" />
+                      </div>
+                      <span class="usage-bar-val">{{ formatTokens(d.total_tokens) }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="usage-grid">
+                  <div class="usage-section">
+                    <div class="usage-section__title">按服务商</div>
+                    <div v-if="!(usageSummary.by_provider || []).length" class="usage-empty-sm">暂无数据</div>
+                    <div v-for="b in (usageSummary.by_provider || [])" :key="'p'+b.key" class="usage-line">
+                      <span>{{ b.key }}</span>
+                      <span>{{ formatTokens(b.total_tokens) }} · {{ formatCost(b.estimated_cost) }}</span>
+                    </div>
+                  </div>
+                  <div class="usage-section">
+                    <div class="usage-section__title">按模式</div>
+                    <div v-if="!(usageSummary.by_mode || []).length" class="usage-empty-sm">暂无数据</div>
+                    <div v-for="b in (usageSummary.by_mode || [])" :key="'m'+b.key" class="usage-line">
+                      <span>{{ modeLabel(b.key) }}</span>
+                      <span>{{ formatTokens(b.total_tokens) }} · {{ formatCost(b.estimated_cost) }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="usage-section">
+                  <div class="usage-section__title">按模型</div>
+                  <div v-if="!(usageSummary.by_model || []).length" class="usage-empty-sm">暂无数据</div>
+                  <div v-for="b in (usageSummary.by_model || [])" :key="'md'+b.key" class="usage-line">
+                    <span class="usage-model">{{ b.key }}</span>
+                    <span>{{ formatTokens(b.total_tokens) }} · {{ formatCost(b.estimated_cost) }} · {{ b.request_count }} 次</span>
+                  </div>
+                </div>
+              </template>
+              <div v-else class="usage-empty">暂无用量数据。对话后会自动记录。</div>
+            </div>
+
             <!-- 关于 -->
             <AboutPanel v-else-if="mainTab === 'about'" />
           </div>
@@ -1007,6 +1136,36 @@ function formatSize(bytes: number): string {
 .nav-item { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: none; border-radius: var(--radius-md); background: transparent; font-size: var(--text-sm); font-family: inherit; color: var(--color-text-2); cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out); }
 .nav-item:hover:not(.active) { background: var(--color-paper-3); color: var(--color-text); }
 .nav-item.active { background: var(--color-accent-soft); color: var(--color-accent); font-weight: 500; }
+
+.usage-panel { padding: var(--space-4) var(--space-5); overflow-y: auto; height: 100%; box-sizing: border-box; }
+.usage-header { display: flex; justify-content: space-between; gap: var(--space-3); align-items: flex-start; margin-bottom: var(--space-4); }
+.usage-range { display: flex; gap: 4px; flex-wrap: wrap; }
+.usage-range-btn {
+  border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-2);
+  border-radius: var(--radius-full); padding: 3px 10px; font-size: 11px; cursor: pointer;
+}
+.usage-range-btn.active { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-soft); font-weight: 600; }
+.usage-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-bottom: var(--space-4); }
+.usage-card {
+  border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  background: var(--color-paper-2); padding: var(--space-3);
+}
+.usage-card__label { font-size: 11px; color: var(--color-text-3); margin-bottom: 4px; }
+.usage-card__value { font-size: 22px; font-weight: 700; color: var(--color-text-1); font-variant-numeric: tabular-nums; }
+.usage-card__sub { margin-top: 4px; font-size: 11px; color: var(--color-text-3); }
+.usage-section { margin-bottom: var(--space-4); }
+.usage-section__title { font-size: 12px; font-weight: 600; color: var(--color-text-2); margin-bottom: 8px; }
+.usage-bars { display: flex; flex-direction: column; gap: 6px; }
+.usage-bar-row { display: grid; grid-template-columns: 48px 1fr 56px; gap: 8px; align-items: center; }
+.usage-bar-key { font-size: 11px; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+.usage-bar-track { height: 8px; background: var(--color-paper-3); border-radius: 999px; overflow: hidden; }
+.usage-bar-fill { height: 100%; background: var(--color-accent); border-radius: 999px; min-width: 4px; }
+.usage-bar-val { font-size: 11px; color: var(--color-text-2); text-align: right; font-variant-numeric: tabular-nums; }
+.usage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.usage-line { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--color-border); color: var(--color-text-2); }
+.usage-model { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-empty { color: var(--color-text-3); font-size: 13px; padding: var(--space-6) 0; text-align: center; }
+.usage-empty-sm { color: var(--color-text-3); font-size: 12px; padding: 4px 0; }
 .panel { flex: 1; overflow: hidden; padding: var(--space-4) var(--space-5); display: flex; flex-direction: column; }
 
 /* ── Providers layout ── */

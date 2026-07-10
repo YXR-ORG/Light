@@ -8,7 +8,7 @@
   "frontend:dev:serverUrl": "auto",
   "info": {
     "productName": "Light",
-    "productVersion": "1.0.0",
+    "productVersion": "2.1.0",
     "copyright": "© 2026 Light",
     "comments": "Light - Your local AI assistant"
   },

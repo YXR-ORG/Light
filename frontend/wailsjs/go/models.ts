@@ -100,6 +100,8 @@ export namespace handler {
 	    attachments: Attachment[];
 	    goal: string;
 	    workflow: string;
+	    acceptance_criteria: string;
+	    max_turns: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new StreamTaskRequest(source);
@@ -118,6 +120,8 @@ export namespace handler {
 	        this.attachments = this.convertValues(source["attachments"], Attachment);
 	        this.goal = source["goal"];
 	        this.workflow = source["workflow"];
+	        this.acceptance_criteria = source["acceptance_criteria"];
+	        this.max_turns = source["max_turns"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -247,6 +251,8 @@ export namespace storage {
 	    parent_conv_id: string;
 	    fork_from_msg_id: string;
 	    goal: string;
+	    acceptance_criteria: string;
+	    max_turns: number;
 	    // Go type: time
 	    created_at: any;
 	    // Go type: time
@@ -272,6 +278,8 @@ export namespace storage {
 	        this.parent_conv_id = source["parent_conv_id"];
 	        this.fork_from_msg_id = source["fork_from_msg_id"];
 	        this.goal = source["goal"];
+	        this.acceptance_criteria = source["acceptance_criteria"];
+	        this.max_turns = source["max_turns"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	    }
@@ -426,6 +434,9 @@ export namespace storage {
 	    knowledge_base_id: string;
 	    generation_group_id: string;
 	    gen_index: number;
+	    prompt_tokens: number;
+	    completion_tokens: number;
+	    total_tokens: number;
 	    // Go type: time
 	    created_at: any;
 	
@@ -450,6 +461,9 @@ export namespace storage {
 	        this.knowledge_base_id = source["knowledge_base_id"];
 	        this.generation_group_id = source["generation_group_id"];
 	        this.gen_index = source["gen_index"];
+	        this.prompt_tokens = source["prompt_tokens"];
+	        this.completion_tokens = source["completion_tokens"];
+	        this.total_tokens = source["total_tokens"];
 	        this.created_at = this.convertValues(source["created_at"], null);
 	    }
 	
@@ -506,6 +520,74 @@ export namespace storage {
 	        this.enabled = source["enabled"];
 	        this.sort_order = source["sort_order"];
 	    }
+	}
+	export class UsageBucket {
+	    key: string;
+	    prompt_tokens: number;
+	    completion_tokens: number;
+	    total_tokens: number;
+	    estimated_cost: number;
+	    request_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageBucket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.prompt_tokens = source["prompt_tokens"];
+	        this.completion_tokens = source["completion_tokens"];
+	        this.total_tokens = source["total_tokens"];
+	        this.estimated_cost = source["estimated_cost"];
+	        this.request_count = source["request_count"];
+	    }
+	}
+	export class UsageSummary {
+	    total_prompt_tokens: number;
+	    total_completion_tokens: number;
+	    total_tokens: number;
+	    estimated_cost: number;
+	    request_count: number;
+	    by_day: UsageBucket[];
+	    by_provider: UsageBucket[];
+	    by_mode: UsageBucket[];
+	    by_model: UsageBucket[];
+	
+	    static createFrom(source: any = {}) {
+	        return new UsageSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total_prompt_tokens = source["total_prompt_tokens"];
+	        this.total_completion_tokens = source["total_completion_tokens"];
+	        this.total_tokens = source["total_tokens"];
+	        this.estimated_cost = source["estimated_cost"];
+	        this.request_count = source["request_count"];
+	        this.by_day = this.convertValues(source["by_day"], UsageBucket);
+	        this.by_provider = this.convertValues(source["by_provider"], UsageBucket);
+	        this.by_mode = this.convertValues(source["by_mode"], UsageBucket);
+	        this.by_model = this.convertValues(source["by_model"], UsageBucket);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

@@ -6,4 +6,8 @@ export function Get(arg1:string):Promise<string>;
 
 export function GetAll():Promise<Array<storage.Setting>>;
 
+export function GetConversationUsage(arg1:string):Promise<Record<string, any>>;
+
+export function GetUsageStats(arg1:string):Promise<storage.UsageSummary>;
+
 export function Set(arg1:string,arg2:string):Promise<void>;

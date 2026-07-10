@@ -35,6 +35,8 @@ const workDir = ref('')
 
 // task 模式目标（goal 模式）
 const goal = ref('')
+const acceptanceCriteria = ref('') // 换行分隔的验收标准
+const maxTurns = ref(5)            // 验收打回轮数上限
 const showGoalInput = ref(false)
 
 // 任务模式 tooltip（Teleport 到 body，避免 overflow:hidden 裁剪）
@@ -73,6 +75,8 @@ watch(() => store.currentConvId, async (convId) => {
   selectedKBID.value = conv.knowledge_base_id || ''
   workDir.value = (conv as any).work_dir || ''
   goal.value = (conv as any).goal || ''
+  acceptanceCriteria.value = (conv as any).acceptance_criteria || ''
+  maxTurns.value = (conv as any).max_turns > 0 ? (conv as any).max_turns : 5
   showGoalInput.value = false
   // 如果是知识模式，预加载知识库列表
   if (mode === 'knowledge') {
@@ -164,13 +168,26 @@ async function pickWorkDir() {
   }
 }
 
-// task 模式：保存目标
+// task 模式：保存目标 + 验收标准 + 轮数上限
 async function saveGoal() {
   showGoalInput.value = false
   if (!store.currentConvId) return
-  await SetGoal(store.currentConvId, goal.value).catch(() => {})
+  const turns = Math.max(1, Math.min(20, Number(maxTurns.value) || 5))
+  maxTurns.value = turns
+  await SetGoal(store.currentConvId, goal.value, acceptanceCriteria.value, turns).catch(() => {})
   const conv = store.conversations.find(c => c.id === store.currentConvId) as any
-  if (conv) (conv as any).goal = goal.value
+  if (conv) {
+    (conv as any).goal = goal.value
+    ;(conv as any).acceptance_criteria = acceptanceCriteria.value
+    ;(conv as any).max_turns = turns
+  }
+}
+
+function clearGoal() {
+  goal.value = ''
+  acceptanceCriteria.value = ''
+  maxTurns.value = 5
+  saveGoal()
 }
 
 const selectedKBName = computed(() => {
@@ -402,6 +419,8 @@ async function sendTask(text: string) {
       attachments: sentAttachments,
       goal: chatMode.value === 'workflow' ? '' : goal.value,
       workflow: chatMode.value === 'workflow' ? goal.value : '',
+      acceptance_criteria: acceptanceCriteria.value,
+      max_turns: Math.max(1, Math.min(20, Number(maxTurns.value) || 5)),
     } as any)
   } catch (e: any) {
     const msg = e?.message || e?.Message || String(e)
@@ -676,9 +695,9 @@ function onKeydown(e: KeyboardEvent) {
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             <span class="btn-workdir__label">{{ workDir || '选择目录' }}</span>
           </button>
-          <button class="btn-goal" :class="{ 'btn-goal--active': !!goal }" @click.stop="toggleGoalInput" :title="chatMode === 'workflow' ? '设定需求' : '设定目标'">
+          <button class="btn-goal" :class="{ 'btn-goal--active': !!goal }" @click.stop="toggleGoalInput" :title="chatMode === 'workflow' ? '设定需求与验收标准' : '设定目标与验收标准'">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-            <span>{{ chatMode === 'workflow' ? (goal ? '需求已设' : '需求') : (goal ? '目标已设' : '目标') }}</span>
+            <span>{{ chatMode === 'workflow' ? (goal ? (acceptanceCriteria ? '需求+验收' : '需求已设') : '需求') : (goal ? (acceptanceCriteria ? '目标+验收' : '目标已设') : '目标') }}</span>
           </button>
         </div>
         <!-- 分隔线 -->
@@ -772,6 +791,7 @@ function onKeydown(e: KeyboardEvent) {
       </div>
       <!-- 需求/目标输入气泡 -->
       <div v-if="showGoalInput" class="goal-picker" :style="goalPickerStyle">
+        <div class="goal-picker-label">{{ chatMode === 'workflow' ? '需求描述' : '目标' }}</div>
         <textarea
           v-model="goal"
           class="goal-picker-input"
@@ -779,11 +799,30 @@ function onKeydown(e: KeyboardEvent) {
             ? '描述需求，Agent 将按 需求→设计→编码→验收 流程自主执行'
             : '设定目标，Agent 将自主执行直到完成（中途不打断你）'"
           rows="3"
-          @keydown.enter.exact.prevent="saveGoal"
           @keydown.escape="showGoalInput = false"
         ></textarea>
+        <div class="goal-picker-label">验收标准（可选，每行一条）</div>
+        <textarea
+          v-model="acceptanceCriteria"
+          class="goal-picker-input goal-picker-input--criteria"
+          placeholder="例：&#10;测试全部通过&#10;首页无控制台报错&#10;相关文件已写入工作目录"
+          rows="3"
+          @keydown.escape="showGoalInput = false"
+        ></textarea>
+        <div class="goal-picker-row">
+          <label class="goal-picker-label goal-picker-label--inline">最多打回</label>
+          <input
+            v-model.number="maxTurns"
+            class="goal-picker-turns"
+            type="number"
+            min="1"
+            max="20"
+            @keydown.escape="showGoalInput = false"
+          />
+          <span class="goal-picker-hint">次（1–20，默认 5）</span>
+        </div>
         <div class="goal-picker-actions">
-          <button class="goal-btn goal-btn--clear" @click="goal = ''; saveGoal()" v-if="goal">{{ chatMode === 'workflow' ? '清除需求' : '清除目标' }}</button>
+          <button class="goal-btn goal-btn--clear" @click="clearGoal" v-if="goal || acceptanceCriteria">{{ chatMode === 'workflow' ? '清除需求' : '清除目标' }}</button>
           <button class="goal-btn goal-btn--save" @click="saveGoal">确定</button>
         </div>
       </div>
@@ -1275,16 +1314,32 @@ textarea.has-attach-btn {
 .goal-picker {
   background: var(--color-paper); border: 1px solid var(--color-border);
   border-radius: var(--radius-md); box-shadow: 0 -4px 20px rgba(0,0,0,.12);
-  min-width: 320px; max-width: 400px; padding: var(--space-3);
+  min-width: 340px; max-width: 420px; padding: var(--space-3);
 }
+.goal-picker-label {
+  font-size: 11px; color: var(--color-text-3); margin-bottom: 4px; margin-top: 6px;
+}
+.goal-picker-label:first-child { margin-top: 0; }
+.goal-picker-label--inline { margin: 0; }
 .goal-picker-input {
   width: 100%; resize: vertical; border: 1px solid var(--color-border);
   border-radius: var(--radius-sm); outline: none; padding: var(--space-2);
   background: var(--color-surface); font-size: var(--text-sm); line-height: 1.5;
   color: var(--color-text-1); font-family: inherit;
 }
+.goal-picker-input--criteria { min-height: 64px; }
 .goal-picker-input:focus { border-color: var(--color-accent); }
 .goal-picker-input::placeholder { color: var(--color-text-3); }
+.goal-picker-row {
+  display: flex; align-items: center; gap: 8px; margin-top: 8px;
+}
+.goal-picker-turns {
+  width: 56px; height: 26px; border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: 0 6px; outline: none;
+  background: var(--color-surface); color: var(--color-text-1); font-size: 12px;
+}
+.goal-picker-turns:focus { border-color: var(--color-accent); }
+.goal-picker-hint { font-size: 11px; color: var(--color-text-3); }
 .goal-picker-actions {
   display: flex; justify-content: flex-end; gap: 6px; margin-top: var(--space-2);
 }

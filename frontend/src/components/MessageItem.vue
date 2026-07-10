@@ -36,6 +36,12 @@ const thinkingOpen = ref(false)
 const copied = ref(false)
 const previewHtml = ref('')
 
+const tokenLabel = computed(() => {
+  const n = Number((props.msg as any).total_tokens || 0)
+  if (!n) return ''
+  return `${n.toLocaleString()} tokens`
+})
+
 watch(() => props.streaming, (v) => { if (v) thinkingOpen.value = true })
 
 const content = computed(() => {
@@ -115,6 +121,7 @@ function onMarkdownClick(e: MouseEvent) {
       <div class="msg-text" v-if="isUser" v-text="content || ''" />
       <div class="msg-text markdown-body" v-else v-html="renderedContent || ''" @click="onMarkdownClick" />
       <span v-if="props.streaming && !isUser" class="cursor" />
+      <div v-if="!isUser && !streaming && tokenLabel" class="msg-token">{{ tokenLabel }}</div>
       <HtmlPreviewDialog v-if="previewHtml" :html="previewHtml" @close="previewHtml = ''" />
 
       <!-- 操作按钮：所有历史 assistant 消息 hover 时显示 -->
@@ -174,6 +181,13 @@ function onMarkdownClick(e: MouseEvent) {
 .assistant .msg-avatar { background: var(--color-paper-4); color: var(--color-text-2); }
 
 .msg-content { flex: 1; min-width: 0; }
+
+.msg-token {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-text-3);
+  font-variant-numeric: tabular-nums;
+}
 
 .msg-label {
   font-size: var(--text-xs); font-weight: 600;

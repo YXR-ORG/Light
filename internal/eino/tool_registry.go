@@ -103,6 +103,17 @@ func BuildTaskTools(ctx context.Context, workDir string, emitter BashStepEmitter
 	return tools, finishGoalTool, specTool
 }
 
+// BuildReviewTools 返回独立审查员可用的只读工具集：read_file / list_dir / 受限 bash。
+// 审查员不能写文件、不能 mkdir，bash 仅允许只读/测试类命令。
+func BuildReviewTools(workDir string) []tool.BaseTool {
+	base := &fileTool{workDir: workDir}
+	return []tool.BaseTool{
+		&ReadFileTool{base},
+		&ListDirTool{base},
+		NewReadOnlyBashTool(workDir),
+	}
+}
+
 // loadAllMCPTools 连接所有已启用 MCP server，返回其工具。
 func loadAllMCPTools(ctx context.Context) []tool.BaseTool {
 	servers, err := storage.ListMCPServers()

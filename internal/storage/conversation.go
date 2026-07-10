@@ -96,7 +96,16 @@ func DeleteConversation(id string) error {
 }
 
 func SaveMessage(convID, role, content, thinking, toolCalls, toolResult, agentID, mcpServerIDs string, attachments ...string) (*Message, error) {
+	return SaveMessageWithTokens(convID, role, content, thinking, toolCalls, toolResult, agentID, mcpServerIDs, TokenSnapshot{}, attachments...)
+}
+
+// SaveMessageWithTokens 保存消息并写入 token 字段。
+func SaveMessageWithTokens(convID, role, content, thinking, toolCalls, toolResult, agentID, mcpServerIDs string, tokens TokenSnapshot, attachments ...string) (*Message, error) {
 	id := NewID()
+	total := tokens.TotalTokens
+	if total == 0 {
+		total = tokens.PromptTokens + tokens.CompletionTokens
+	}
 	m := &Message{
 		ID:                id,
 		ConversationID:    convID,
@@ -109,6 +118,9 @@ func SaveMessage(convID, role, content, thinking, toolCalls, toolResult, agentID
 		MCPServerIDs:      mcpServerIDs,
 		GenerationGroupID: id, // 默认 group = 自身，首次生成
 		GenIndex:          0,
+		PromptTokens:      tokens.PromptTokens,
+		CompletionTokens:  tokens.CompletionTokens,
+		TotalTokens:       total,
 	}
 	if len(attachments) > 0 {
 		m.Attachments = attachments[0]
@@ -128,7 +140,16 @@ func SaveTaskMessage(convID, role, content string) (*Message, error) {
 
 // SaveTaskMessageWithArtifacts 保存 task 消息，并附带产物 JSON（[]Artifact）。
 func SaveTaskMessageWithArtifacts(convID, role, content, artifacts string) (*Message, error) {
+	return SaveTaskMessageWithArtifactsAndTokens(convID, role, content, artifacts, TokenSnapshot{})
+}
+
+// SaveTaskMessageWithArtifactsAndTokens 保存 task 消息 + 产物 + token。
+func SaveTaskMessageWithArtifactsAndTokens(convID, role, content, artifacts string, tokens TokenSnapshot) (*Message, error) {
 	id := NewID()
+	total := tokens.TotalTokens
+	if total == 0 {
+		total = tokens.PromptTokens + tokens.CompletionTokens
+	}
 	m := &Message{
 		ID:                id,
 		ConversationID:    convID,
@@ -138,6 +159,9 @@ func SaveTaskMessageWithArtifacts(convID, role, content, artifacts string) (*Mes
 		Mode:              "task",
 		GenerationGroupID: id,
 		GenIndex:          0,
+		PromptTokens:      tokens.PromptTokens,
+		CompletionTokens:  tokens.CompletionTokens,
+		TotalTokens:       total,
 	}
 	err := DB.Create(m).Error
 	if err == nil {
@@ -148,6 +172,15 @@ func SaveTaskMessageWithArtifacts(convID, role, content, artifacts string) (*Mes
 }
 
 func SaveRegeneratedMessage(convID, content, thinking, groupID string, genIndex int) (*Message, error) {
+	return SaveRegeneratedMessageWithTokens(convID, content, thinking, groupID, genIndex, TokenSnapshot{})
+}
+
+// SaveRegeneratedMessageWithTokens 保存重新生成消息并写入 token。
+func SaveRegeneratedMessageWithTokens(convID, content, thinking, groupID string, genIndex int, tokens TokenSnapshot) (*Message, error) {
+	total := tokens.TotalTokens
+	if total == 0 {
+		total = tokens.PromptTokens + tokens.CompletionTokens
+	}
 	m := &Message{
 		ID:                NewID(),
 		ConversationID:    convID,
@@ -156,6 +189,9 @@ func SaveRegeneratedMessage(convID, content, thinking, groupID string, genIndex 
 		Thinking:          thinking,
 		GenerationGroupID: groupID,
 		GenIndex:          genIndex,
+		PromptTokens:      tokens.PromptTokens,
+		CompletionTokens:  tokens.CompletionTokens,
+		TotalTokens:       total,
 	}
 	err := DB.Create(m).Error
 	if err == nil {
@@ -210,10 +246,15 @@ func UpdateConversationWorkDir(id, workDir string) error {
 		UpdateColumn("work_dir", workDir).Error
 }
 
-// UpdateConversationGoal 更新 task 模式目标，不影响 updated_at。
-func UpdateConversationGoal(id, goal string) error {
+// UpdateConversationGoal 更新 task 模式目标、验收标准和轮数上限，不影响 updated_at。
+// acceptanceCriteria 为换行分隔的验收标准（空=不启用验收）；maxTurns 为 0 表示用系统默认值。
+func UpdateConversationGoal(id, goal, acceptanceCriteria string, maxTurns int) error {
 	return DB.Model(&Conversation{}).Where("id = ?", id).
-		UpdateColumn("goal", goal).Error
+		Updates(map[string]interface{}{
+			"goal":                goal,
+			"acceptance_criteria": acceptanceCriteria,
+			"max_turns":           maxTurns,
+		}).Error
 }
 
 // SaveTaskMessageWithAttachments 保存 task 模式用户消息，附带附件 meta JSON。
@@ -335,10 +376,12 @@ func ForkConversation(srcConvID, forkFromMsgID string) (*Conversation, error) {
 		MCPServerIDs:    src.MCPServerIDs,
 		Mode:            src.Mode,
 		KnowledgeBaseID: src.KnowledgeBaseID,
-		ParentConvID:    srcConvID,
-		ForkFromMsgID:   forkFromMsgID,
-		Goal:            src.Goal,
-	}
+ParentConvID:       srcConvID,
+			ForkFromMsgID:      forkFromMsgID,
+			Goal:               src.Goal,
+			AcceptanceCriteria: src.AcceptanceCriteria,
+			MaxTurns:           src.MaxTurns,
+		}
 
 	// 单事务：创建会话 + 复制消息
 	err := DB.Transaction(func(tx *gorm.DB) error {

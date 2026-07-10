@@ -22,7 +22,7 @@ export function Search(arg1:string):Promise<Array<storage.Conversation>>;
 
 export function SetAgent(arg1:string,arg2:string):Promise<void>;
 
-export function SetGoal(arg1:string,arg2:string):Promise<void>;
+export function SetGoal(arg1:string,arg2:string,arg3:string,arg4:number):Promise<void>;
 
 export function SetMode(arg1:string,arg2:string,arg3:string):Promise<void>;
 

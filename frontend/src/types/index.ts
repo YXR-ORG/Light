@@ -28,4 +28,7 @@ export interface StreamChunk {
   thinking?: string
   done: boolean
   error?: string
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
 }

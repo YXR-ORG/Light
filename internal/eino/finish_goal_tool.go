@@ -91,3 +91,12 @@ func (t *FinishGoalTool) GetSuccess() bool {
 	defer t.mu.Unlock()
 	return t.success
 }
+
+// Reset 清除 finished 状态，允许验收打回后再次调用 finish_goal。
+func (t *FinishGoalTool) Reset() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.finished = false
+	t.success = true
+	t.summary = ""
+}

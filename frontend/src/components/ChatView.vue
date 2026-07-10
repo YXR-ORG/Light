@@ -7,6 +7,7 @@ import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { GetMessages } from '../../wailsjs/go/handler/ConversationHandler'
 import { StreamTask } from '../../wailsjs/go/handler/TaskHandler'
+import { GetConversationUsage } from '../../wailsjs/go/handler/SettingsHandler'
 import type { storage } from '../../wailsjs/go/models'
 import { isNearBottom, shouldAutoScroll } from '../utils/scroll'
 import { shouldShowTaskHistory } from '../utils/taskHistory'
@@ -44,6 +45,10 @@ const currentNotice = ref('')
 // 是否正在流式输出 task
 const taskStreaming = ref(false)
 const taskStopped = ref(false)
+// 会话累计用量
+const convTotalTokens = ref(0)
+const convEstimatedCost = ref(0)
+const liveTaskTokens = ref(0)
 
 interface TaskViewState {
   completedRounds: TaskRound[]
@@ -54,6 +59,7 @@ interface TaskViewState {
   currentNotice: string
   taskStreaming: boolean
   taskStopped: boolean
+  liveTaskTokens: number
 }
 
 const taskStates = new Map<string, TaskViewState>()
@@ -68,6 +74,7 @@ function emptyTaskState(): TaskViewState {
     currentNotice: '',
     taskStreaming: false,
     taskStopped: false,
+    liveTaskTokens: 0,
   }
 }
 
@@ -90,6 +97,7 @@ function saveCurrentTaskState(convID: string) {
     currentNotice: currentNotice.value,
     taskStreaming: taskStreaming.value,
     taskStopped: taskStopped.value,
+    liveTaskTokens: liveTaskTokens.value,
   })
 }
 
@@ -103,8 +111,33 @@ function applyTaskState(convID: string | null) {
   currentNotice.value = state.currentNotice
   taskStreaming.value = state.taskStreaming
   taskStopped.value = state.taskStopped
+  liveTaskTokens.value = state.liveTaskTokens || 0
   store.setStreaming(state.taskStreaming)
 }
+
+async function refreshConvUsage(convID: string | null) {
+  if (!convID) {
+    convTotalTokens.value = 0
+    convEstimatedCost.value = 0
+    return
+  }
+  try {
+    const u = await GetConversationUsage(convID)
+    convTotalTokens.value = Number(u?.total_tokens || 0)
+    convEstimatedCost.value = Number(u?.estimated_cost || 0)
+  } catch {
+    // ignore
+  }
+}
+
+const headerUsageLabel = computed(() => {
+  const live = liveTaskTokens.value || 0
+  const total = convTotalTokens.value + (taskStreaming.value ? live : 0)
+  if (!total) return ''
+  const cost = convEstimatedCost.value
+  if (cost > 0) return `${total.toLocaleString()} tokens · ≈$${cost.toFixed(4)}`
+  return `${total.toLocaleString()} tokens`
+})
 
 function applyStepToTaskState(state: TaskViewState, evt: TaskStepEvent) {
   if (evt.type === 'user_msg') {
@@ -140,6 +173,12 @@ function applyStepToTaskState(state: TaskViewState, evt: TaskStepEvent) {
     if (!state.taskStopped) state.currentNotice = evt.content || ''
     return
   }
+  if (evt.type === 'usage') {
+    const u = (evt as any).usage
+    if (u?.cumulative_tokens) state.liveTaskTokens = Number(u.cumulative_tokens)
+    else if (u?.total_tokens) state.liveTaskTokens = (state.liveTaskTokens || 0) + Number(u.total_tokens)
+    return
+  }
   if (evt.type === 'done') {
     if (state.taskStopped) return
     state.taskStreaming = false
@@ -154,6 +193,7 @@ function applyStepToTaskState(state: TaskViewState, evt: TaskStepEvent) {
     state.streamingContent = ''
     state.currentNotice = ''
     state.currentTaskUserContent = ''
+    // done 后刷新会话累计
     return
   }
   if (evt.type === 'stopped') {
@@ -213,6 +253,8 @@ watch(() => store.currentConvId, async (convID, oldConvID) => {
   if (oldConvID) saveCurrentTaskState(oldConvID)
   applyTaskState(convID)
   taskUserScrolled = false
+  liveTaskTokens.value = 0
+  await refreshConvUsage(convID)
   if (isTaskMode.value) await loadTaskHistory()
   scrollTaskToBottom(true)
 }, { immediate: true })
@@ -220,6 +262,11 @@ watch(() => store.currentConvId, async (convID, oldConvID) => {
 // 监听模式切换
 watch(isTaskMode, async (v) => {
   if (v) await loadTaskHistory()
+})
+
+// chat 流结束后 messages 会刷新，顺带更新会话用量
+watch(() => store.messages.length, () => {
+  if (store.currentConvId && !taskStreaming.value) refreshConvUsage(store.currentConvId)
 })
 
 // ─── task:step 事件处理 ───────────────────────────────────────────
@@ -235,6 +282,12 @@ interface TaskStepEvent {
   error?: string
   user_content?: string
   attachments_meta?: string
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+    cumulative_tokens?: number
+  }
 }
 
 function onTaskStep(evt: TaskStepEvent) {
@@ -243,6 +296,14 @@ function onTaskStep(evt: TaskStepEvent) {
   if (convID === store.currentConvId) saveCurrentTaskState(convID)
   const state = getTaskState(convID)
   applyStepToTaskState(state, evt)
+  if (evt.type === 'done') {
+    // 任务结束后把 live 清零并刷新库内累计
+    state.liveTaskTokens = 0
+    if (convID === store.currentConvId) {
+      liveTaskTokens.value = 0
+      refreshConvUsage(convID)
+    }
+  }
   if (convID !== store.currentConvId) return
   applyTaskState(convID)
   taskUserScrolled = evt.type === 'user_msg' ? false : taskUserScrolled
@@ -323,6 +384,9 @@ onUnmounted(() => {
           <svg v-if="isWorkflowMode" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
           <svg v-else width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           {{ isWorkflowMode ? '工作流模式' : '任务模式' }}
+        </span>
+        <span v-if="headerUsageLabel" class="chat-header-usage" :title="taskStreaming ? '含本轮实时用量' : '本会话累计用量（估算）'">
+          {{ headerUsageLabel }}
         </span>
       </div>
     </div>
@@ -450,6 +514,13 @@ onUnmounted(() => {
   border-radius: var(--radius-full);
 }
 
+.chat-header-usage {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--color-text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .chat-header-badge {
   display: inline-flex;
   align-items: center;

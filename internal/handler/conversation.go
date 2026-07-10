@@ -65,9 +65,10 @@ func (h *ConversationHandler) UpdateConversationWorkDir(id, workDir string) erro
 	return storage.UpdateConversationWorkDir(id, workDir)
 }
 
-// SetGoal 设定 task 模式的目标（goal 模式）。空字符串清除 goal。
-func (h *ConversationHandler) SetGoal(id, goal string) error {
-	return storage.UpdateConversationGoal(id, goal)
+// SetGoal 设定 task 模式的目标、验收标准和轮数上限。
+// goal 为空时清除目标；acceptanceCriteria 为换行分隔的验收标准；maxTurns 为 0 表示用默认值。
+func (h *ConversationHandler) SetGoal(id, goal, acceptanceCriteria string, maxTurns int) error {
+	return storage.UpdateConversationGoal(id, goal, acceptanceCriteria, maxTurns)
 }
 
 func (h *ConversationHandler) GetMessages(convID string) ([]storage.Message, error) {
