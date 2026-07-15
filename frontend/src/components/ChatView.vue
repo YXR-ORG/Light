@@ -10,7 +10,7 @@ import { StreamTask } from '../../wailsjs/go/handler/TaskHandler'
 import { GetConversationUsage } from '../../wailsjs/go/handler/SettingsHandler'
 import type { storage } from '../../wailsjs/go/models'
 import { isNearBottom, shouldAutoScroll } from '../utils/scroll'
-import { shouldShowTaskHistory } from '../utils/taskHistory'
+import { shouldShowTaskHistory, filterOverlappingTaskHistory } from '../utils/taskHistory'
 
 const store = useChatStore()
 
@@ -232,7 +232,18 @@ const isWorkflowMode = computed(() => {
   return conv?.mode === 'workflow'
 })
 
-const showTaskHistory = computed(() => shouldShowTaskHistory(taskHistoryMsgs.value.length, completedRounds.value.length))
+// DB 历史与内存 completedRounds / 当前流式用户消息去重后再展示，避免切换会话后问答双显
+const visibleTaskHistoryMsgs = computed(() =>
+  filterOverlappingTaskHistory(
+    taskHistoryMsgs.value,
+    completedRounds.value,
+    currentTaskUserContent.value,
+  ),
+)
+
+const showTaskHistory = computed(() =>
+  shouldShowTaskHistory(visibleTaskHistoryMsgs.value.length, completedRounds.value.length),
+)
 
 // task 模式清除上下文：taskCutoffActive=true 时，在已显示内容末尾画分割线，
 // 下次发送只传 cutoff 之后的历史（后端 ignore_context 全量清空历史）。
@@ -394,9 +405,9 @@ onUnmounted(() => {
     <!-- task 模式消息区 -->
     <div v-if="isTaskMode" ref="taskListRef" class="task-list" @scroll.passive="onTaskScroll">
 
-      <!-- 跨会话恢复：DB 历史始终显示；当前会话新完成轮次追加在其后，避免结束后历史区消失 -->
+      <!-- 跨会话恢复：DB 历史显示更早轮次；与 completedRounds 重叠的尾部已过滤，避免双显 -->
       <template v-if="showTaskHistory">
-        <template v-for="(msg, idx) in taskHistoryMsgs" :key="msg.id">
+        <template v-for="(msg, idx) in visibleTaskHistoryMsgs" :key="msg.id">
           <TaskMessageItem
             :role="msg.role as 'user' | 'assistant'"
             :user-content="msg.role === 'user' ? msg.content : undefined"
@@ -404,8 +415,8 @@ onUnmounted(() => {
             :artifacts-json="(msg as any).artifacts"
             :attachments-meta="msg.role === 'user' ? (msg as any).attachments : undefined"
             :is-history="true"
-            :can-regenerate="!(taskHistoryMsgs[idx - 1] as any)?.attachments"
-            @regenerate="msg.role === 'assistant' && regenerateTask(taskHistoryMsgs[idx - 1]?.role === 'user' ? taskHistoryMsgs[idx - 1].content : '')"
+            :can-regenerate="!(visibleTaskHistoryMsgs[idx - 1] as any)?.attachments"
+            @regenerate="msg.role === 'assistant' && regenerateTask(visibleTaskHistoryMsgs[idx - 1]?.role === 'user' ? visibleTaskHistoryMsgs[idx - 1].content : '')"
           />
         </template>
       </template>
@@ -430,7 +441,7 @@ onUnmounted(() => {
       </template>
 
       <!-- 上下文分割线：清除上下文激活且有历史内容时显示 -->
-      <div v-if="store.taskCutoffActive && (completedRounds.length > 0 || taskHistoryMsgs.length > 0)" class="task-ctx-divider">
+      <div v-if="store.taskCutoffActive && (completedRounds.length > 0 || visibleTaskHistoryMsgs.length > 0)" class="task-ctx-divider">
         <span class="task-ctx-divider-line" />
         <span class="task-ctx-divider-label">上下文从此处清除</span>
         <span class="task-ctx-divider-line" />
