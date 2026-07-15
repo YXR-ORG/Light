@@ -21,10 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # macos-latest 现为 macOS 26：Go < 1.23 产出的二进制缺 LC_UUID，dyld 会直接 Abort。
+      # go.mod 已是 go 1.26，CI 与本地对齐，避免 wails CLI 自身无法启动。
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.26.x'
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -89,7 +91,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.26.x'
 
       - name: Setup Node
         uses: actions/setup-node@v4
